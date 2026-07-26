@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">悬浮提词器</string>
+    <string name="title_main">悬浮提词器</string>
+    <string name="subtitle">专业的移动提词解决方案</string>
+
+    <!-- 编辑区 -->
+    <string name="section_script">台词内容</string>
+    <string name="hint_script">在此输入或粘贴你的台词…</string>
+    <string name="btn_clear">清空</string>
+    <string name="btn_import">导入文件</string>
+    <string name="btn_sample">示例文本</string>
+
+    <!-- 显示设置 -->
+    <string name="section_display">显示设置</string>
+    <string name="setting_font_size">字体大小</string>
+    <string name="setting_font_color">字体颜色</string>
+    <string name="setting_bg_color">背景颜色</string>
+    <string name="setting_bg_opacity">背景透明度</string>
+    <string name="setting_line_height">行高</string>
+    <string name="setting_padding">左右边距</string>
+
+    <!-- 播放设置 -->
+    <string name="section_playback">播放设置</string>
+    <string name="setting_speed">滚动速度</string>
+    <string name="setting_tts">语音朗读</string>
+    <string name="setting_tts_rate">语音速度</string>
+    <string name="setting_mirror">镜像翻转</string>
+
+    <!-- 按钮 -->
+    <string name="btn_start">启动悬浮提词</string>
+    <string name="btn_stop">关闭悬浮窗</string>
+
+    <!-- 悬浮窗 -->
+    <string name="floating_channel_name">悬浮提词器</string>
+    <string name="floating_channel_desc">悬浮提词器前台服务通知</string>
+    <string name="floating_notification_title">悬浮提词器运行中</string>
+    <string name="floating_notification_text">点击打开设置 · 长按拖动悬浮窗</string>
+
+    <!-- 权限提示 -->
+    <string name="permission_title">需要悬浮窗权限</string>
+    <string name="permission_msg">悬浮提词器需要「显示在其他应用上层」权限才能正常工作，请前往设置开启。</string>
+    <string name="permission_btn">去授权</string>
+    <string name="permission_granted">权限已授予</string>
+</resources>

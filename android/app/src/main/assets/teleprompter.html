@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .teleprompter {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+
+    .teleprompter-content {
+      position: absolute;
+      left: 0;
+      right: 0;
+      padding: 40vh 16px 40vh 16px;
+      will-change: transform;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      text-align: center;
+      font-weight: 500;
+    }
+
+    .reading-guide {
+      position: absolute;
+      left: 5%;
+      right: 5%;
+      top: 38%;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      pointer-events: none;
+      z-index: 5;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .show-guide .reading-guide { opacity: 1; }
+
+    .start-hint {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: rgba(255,255,255,0.6);
+      font-size: 14px;
+      text-align: center;
+      pointer-events: none;
+      z-index: 10;
+      transition: opacity 0.3s;
+    }
+
+    .start-hint.hidden { opacity: 0; }
+
+    .start-hint .play-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="teleprompter" id="teleprompter">
+    <div class="reading-guide"></div>
+    <pre class="teleprompter-content" id="content"></pre>
+    <div class="start-hint" id="startHint">
+      <div class="play-icon">▶</div>
+      <div>点击播放按钮开始</div>
+    </div>
+  </div>
+
+  <script>
+    // ==================== 状态 ====================
+    var state = {
+      isPlaying: false,
+      scrollPos: 0,
+      targetScrollPos: null,
+      speed: 35,
+      config: null,
+      animFrame: null,
+      ttsActive: false,
+      utterance: null,
+      viewHeight: 0,
+      totalHeight: 0
+    };
+
+    var content = document.getElementById('content');
+    var teleprompter = document.getElementById('teleprompter');
+    var startHint = document.getElementById('startHint');
+
+    // ==================== Android 桥接 ====================
+    window.AndroidBridge = {
+      init: function(config) {
+        state.config = config;
+        applyConfig(config);
+        // 通知原生端初始化完成
+        if (window.Android && window.Android.log) {
+          window.Android.log('Teleprompter initialized, text length: ' + (config.script || '').length);
+        }
+      },
+
+      play: function() {
+        if (!state.config) return;
+        startPlayback();
+      },
+
+      pause: function() {
+        pausePlayback();
+      },
+
+      setSpeed: function(speed) {
+        state.speed = speed;
+      },
+
+      updateConfig: function(config) {
+        state.config = config;
+        applyConfig(config);
+      }
+    };
+
+    // ==================== 配置应用 ====================
+    function applyConfig(config) {
+      content.style.fontSize = config.fontSize + 'px';
+      content.style.color = config.fontColor;
+      content.style.lineHeight = config.lineHeight;
+      content.textContent = config.script || '';
+
+      // 背景色 + 透明度
+      var rgba = hexToRgba(config.bgColor, config.bgOpacity);
+      document.body.style.backgroundColor = rgba;
+      teleprompter.style.backgroundColor = rgba;
+
+      // 镜像
+      content.style.transform = config.mirror ? 'scaleX(-1)' : '';
+
+      state.speed = config.speed;
+      state.ttsActive = config.useTts && 'speechSynthesis' in window;
+
+      // 阅读引导线
+      teleprompter.classList.toggle('show-guide', state.ttsActive);
+
+      // 重新计算尺寸
+      setTimeout(function() {
+        state.viewHeight = teleprompter.clientHeight;
+        state.totalHeight = content.scrollHeight;
+      }, 100);
+    }
+
+    function hexToRgba(hex, alpha) {
+      var r = parseInt(hex.slice(1, 3), 16);
+      var g = parseInt(hex.slice(3, 5), 16);
+      var b = parseInt(hex.slice(5, 7), 16);
+      return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + alpha + ')';
+    }
+
+    // ==================== 播放控制 ====================
+    function startPlayback() {
+      if (!state.config) return;
+
+      state.viewHeight = teleprompter.clientHeight;
+      state.totalHeight = content.scrollHeight;
+
+      if (state.scrollPos >= state.totalHeight - state.viewHeight && state.scrollPos > 0) {
+        state.scrollPos = 0;
+      }
+
+      state.isPlaying = true;
+      startHint.classList.add('hidden');
+
+      if (state.ttsActive) {
+        startTTS(state.config.script);
+      }
+
+      startAnimation();
+    }
+
+    function pausePlayback() {
+      state.isPlaying = false;
+      if (state.ttsActive && 'speechSynthesis' in window) {
+        window.speechSynthesis.pause();
+      }
+    }
+
+    function togglePlay() {
+      if (state.isPlaying) {
+        pausePlayback();
+      } else {
+        startPlayback();
+      }
+    }
+
+    // ==================== 动画循环 ====================
+    function startAnimation() {
+      var lastTime = performance.now();
+
+      function loop(currentTime) {
+        var delta = currentTime - lastTime;
+        lastTime = currentTime;
+
+        if (state.isPlaying) {
+          if (state.ttsActive && state.targetScrollPos !== null) {
+            // TTS 同步：平滑跟随
+            var diff = state.targetScrollPos - state.scrollPos;
+            if (Math.abs(diff) < 0.5) {
+              state.scrollPos = state.targetScrollPos;
+            } else {
+              state.scrollPos += diff * 0.15;
+            }
+          } else {
+            // 手动速度
+            var normalizedSpeed = Math.pow(state.speed / 100, 1.5);
+            var pixelsPerSecond = 15 + normalizedSpeed * 400;
+            state.scrollPos += (pixelsPerSecond * delta) / 1000;
+          }
+
+          var maxScroll = Math.max(0, state.totalHeight - state.viewHeight);
+          if (state.scrollPos >= maxScroll) {
+            state.scrollPos = maxScroll;
+            state.isPlaying = false;
+            stopTTS();
+            // 通知原生端播放结束
+            if (window.Android && window.Android.onPlaybackEnded) {
+              window.Android.onPlaybackEnded();
+            }
+          }
+        }
+
+        // 应用变换
+        var mirror = state.config && state.config.mirror;
+        content.style.transform = 'translateY(-' + state.scrollPos + 'px)' + (mirror ? ' scaleX(-1)' : '');
+
+        state.animFrame = requestAnimationFrame(loop);
+      }
+
+      state.animFrame = requestAnimationFrame(loop);
+    }
+
+    // ==================== TTS 语音同步 ====================
+    function startTTS(text) {
+      if (!('speechSynthesis' in window)) return;
+
+      window.speechSynthesis.cancel();
+
+      var utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'zh-CN';
+      utterance.rate = state.config.ttsRate || 1.0;
+      utterance.pitch = 1;
+
+      // 获取中文语音
+      var voices = window.speechSynthesis.getVoices();
+      var zhVoice = null;
+      for (var i = 0; i < voices.length; i++) {
+        if (voices[i].lang.indexOf('zh') >= 0 || voices[i].lang.indexOf('CN') >= 0) {
+          zhVoice = voices[i];
+          break;
+        }
+      }
+      if (zhVoice) utterance.voice = zhVoice;
+
+      utterance.onboundary = function(event) {
+        if (event.name === 'word' || event.name === 'sentence') {
+          syncToCharIndex(event.charIndex);
+        }
+      };
+
+      utterance.onend = function() {
+        state.isPlaying = false;
+        if (window.Android && window.Android.onPlaybackEnded) {
+          window.Android.onPlaybackEnded();
+        }
+      };
+
+      window.speechSynthesis.speak(utterance);
+      state.utterance = utterance;
+    }
+
+    function stopTTS() {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      state.utterance = null;
+    }
+
+    function syncToCharIndex(charIndex) {
+      var node = content.firstChild;
+      if (!node || charIndex >= node.length) return;
+
+      try {
+        var range = document.createRange();
+        range.setStart(node, charIndex);
+        range.setEnd(node, Math.min(charIndex + 1, node.length));
+
+        var charRect = range.getBoundingClientRect();
+        var contentRect = content.getBoundingClientRect();
+        var relativeY = charRect.top - contentRect.top;
+
+        var viewOffset = state.viewHeight * 0.38;
+        var target = relativeY - viewOffset;
+
+        var maxScroll = Math.max(0, state.totalHeight - state.viewHeight);
+        state.targetScrollPos = Math.max(0, Math.min(target, maxScroll));
+      } catch (e) {}
+    }
+
+    // ==================== 触摸控制 ====================
+    var touchStartY = 0;
+    var touchStartSpeed = 0;
+    var touchStartTime = 0;
+
+    teleprompter.addEventListener('touchstart', function(e) {
+      touchStartY = e.touches[0].clientY;
+      touchStartSpeed = state.speed;
+      touchStartTime = Date.now();
+    }, { passive: true });
+
+    teleprompter.addEventListener('touchmove', function(e) {
+      if (state.ttsActive) return;
+      var deltaY = touchStartY - e.touches[0].clientY;
+      if (Math.abs(deltaY) > 10) {
+        var newSpeed = Math.round(touchStartSpeed + deltaY * 0.15);
+        newSpeed = Math.max(1, Math.min(100, newSpeed));
+        state.speed = newSpeed;
+      }
+    }, { passive: true });
+
+    teleprompter.addEventListener('touchend', function(e) {
+      var deltaY = touchStartY - e.changedTouches[0].clientY;
+      var deltaTime = Date.now() - touchStartTime;
+      if (Math.abs(deltaY) < 10 && deltaTime < 250) {
+        togglePlay();
+      }
+    }, { passive: true });
+
+    // ==================== TTS 语音列表加载 ====================
+    if ('speechSynthesis' in window && 'onvoiceschanged' in window.speechSynthesis) {
+      window.speechSynthesis.onvoiceschanged = function() {
+        if (window.Android && window.Android.log) {
+          window.Android.log('TTS voices loaded: ' + window.speechSynthesis.getVoices().length);
+        }
+      };
+    }
+
+    // ==================== 窗口大小变化 ====================
+    window.addEventListener('resize', function() {
+      state.viewHeight = teleprompter.clientHeight;
+      state.totalHeight = content.scrollHeight;
+    });
+  </script>
+</body>
+</html>

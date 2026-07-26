@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 简化的提词器图标：矩形框 + 播放三角 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,28 L78,28 A4,4 0 0 1 82,32 L82,76 A4,4 0 0 1 78,80 L30,80 A4,4 0 0 1 26,76 L26,32 A4,4 0 0 1 30,28 Z M30,32 L30,76 L78,76 L78,32 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,42 L62,54 L48,66 Z" />
+    <!-- 滚动线 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,40 L60,40 L60,42 L36,42 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,66 L54,66 L54,68 L36,68 Z" />
+</vector>
