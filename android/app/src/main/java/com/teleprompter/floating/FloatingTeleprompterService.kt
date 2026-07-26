@@ -44,8 +44,11 @@ class FloatingTeleprompterService : Service() {
 
         // 音频采样参数
         private const val SAMPLE_RATE = 44100
-        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
-        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+        private const val BUFFER_SIZE_FACTOR = 2
+        private const val VOLUME_THRESHOLD = 800f
+        private const val VOLUME_HIGH = 8000f
+        private const val BASE_SPEED = 2.5f
+        private const val SPEED_SMOOTHING = 0.15f
     }
 
     private lateinit var windowManager: WindowManager
@@ -90,7 +93,7 @@ class FloatingTeleprompterService : Service() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         createNotificationChannel()
 
-        bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+        bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
             bufferSize = SAMPLE_RATE * 2  // fallback
         }
@@ -313,9 +316,9 @@ class FloatingTeleprompterService : Service() {
             audioRecord = AudioRecord(
                 MediaRecorder.AudioSource.MIC,
                 SAMPLE_RATE,
-                CHANNEL_CONFIG,
-                AUDIO_FORMAT,
-                bufferSize * 2
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize * BUFFER_SIZE_FACTOR
             )
 
             if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
