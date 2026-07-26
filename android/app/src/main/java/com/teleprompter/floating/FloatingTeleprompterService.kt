@@ -379,11 +379,15 @@ class FloatingTeleprompterService : Service() {
             else android.R.drawable.ic_media_play
         )
 
+        android.util.Log.d("VoiceFollow", "togglePlay: isPlaying=$isPlaying")
+
         if (isPlaying) {
             // 检查是否开启语音跟随
             useVoiceFollow = prefs.getBoolean("use_tts", true)
             scriptText = prefs.getString("script_text", "") ?: ""
             lastMatchPos = 0
+
+            android.util.Log.d("VoiceFollow", "togglePlay: useVoiceFollow=$useVoiceFollow scriptLen=${scriptText.length}")
 
             if (useVoiceFollow && scriptText.isNotEmpty()) {
                 startVoiceRecognition()
@@ -400,53 +404,90 @@ class FloatingTeleprompterService : Service() {
 
     // ==================== 语音识别跟随 ====================
     private fun startVoiceRecognition() {
+        android.util.Log.d("VoiceFollow", "startVoiceRecognition called, isPlaying=$isPlaying")
+
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            android.util.Log.e("VoiceFollow", "SpeechRecognizer not available")
             Toast.makeText(this, "语音识别不可用，使用手动模式", Toast.LENGTH_SHORT).show()
+            useVoiceFollow = false
             return
         }
 
-        if (speechRecognizer == null) {
-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-            speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {}
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() {
-                    isListening = false
-                    // 朗读停顿后自动重启识别
-                    if (isPlaying && useVoiceFollow) {
-                        restartListening()
-                    }
+        // 每次都重新创建 SpeechRecognizer，避免状态残留
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        android.util.Log.d("VoiceFollow", "SpeechRecognizer created")
+
+        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                android.util.Log.d("VoiceFollow", "onReadyForSpeech")
+            }
+            override fun onBeginningOfSpeech() {
+                android.util.Log.d("VoiceFollow", "onBeginningOfSpeech")
+            }
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {
+                android.util.Log.d("VoiceFollow", "onEndOfSpeech")
+                isListening = false
+                if (isPlaying && useVoiceFollow) {
+                    android.os.Handler(mainLooper).postDelayed({
+                        if (isPlaying && useVoiceFollow) restartListening()
+                    }, 100)
                 }
-                override fun onError(error: Int) {
-                    isListening = false
-                    // 错误后延迟重启（避免抢麦克风冲突）
-                    if (isPlaying && useVoiceFollow) {
-                        android.os.Handler(mainLooper).postDelayed({
-                            if (isPlaying && useVoiceFollow) restartListening()
-                        }, 300)
-                    }
+            }
+            override fun onError(error: Int) {
+                val errorName = when (error) {
+                    SpeechRecognizer.ERROR_AUDIO -> "AUDIO"
+                    SpeechRecognizer.ERROR_CLIENT -> "CLIENT"
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "NO_PERMISSION"
+                    SpeechRecognizer.ERROR_NETWORK -> "NETWORK"
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "NETWORK_TIMEOUT"
+                    SpeechRecognizer.ERROR_NO_MATCH -> "NO_MATCH"
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "BUSY"
+                    SpeechRecognizer.ERROR_SERVER -> "SERVER"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "SPEECH_TIMEOUT"
+                    else -> "UNKNOWN($error)"
                 }
-                override fun onResults(results: Bundle?) {
-                    isListening = false
-                    handleRecognitionResults(results)
-                    if (isPlaying && useVoiceFollow) {
-                        restartListening()
-                    }
+                android.util.Log.e("VoiceFollow", "onError: $errorName")
+                isListening = false
+                if (isPlaying && useVoiceFollow) {
+                    android.os.Handler(mainLooper).postDelayed({
+                        if (isPlaying && useVoiceFollow) restartListening()
+                    }, 500)
                 }
-                override fun onPartialResults(partialResults: Bundle?) {
-                    handleRecognitionResults(partialResults)
+            }
+            override fun onResults(results: Bundle?) {
+                android.util.Log.d("VoiceFollow", "onResults")
+                isListening = false
+                handleRecognitionResults(results)
+                if (isPlaying && useVoiceFollow) {
+                    android.os.Handler(mainLooper).postDelayed({
+                        if (isPlaying && useVoiceFollow) restartListening()
+                    }, 100)
                 }
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-        }
+            }
+            override fun onPartialResults(partialResults: Bundle?) {
+                android.util.Log.d("VoiceFollow", "onPartialResults")
+                handleRecognitionResults(partialResults)
+            }
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
 
         restartListening()
     }
 
     private fun restartListening() {
-        if (isListening) return
+        if (isListening) {
+            android.util.Log.d("VoiceFollow", "restartListening skipped: already listening")
+            return
+        }
+        if (speechRecognizer == null) {
+            android.util.Log.e("VoiceFollow", "restartListening: speechRecognizer is null")
+            return
+        }
         try {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -456,7 +497,9 @@ class FloatingTeleprompterService : Service() {
             }
             speechRecognizer?.startListening(intent)
             isListening = true
+            android.util.Log.d("VoiceFollow", "startListening called successfully")
         } catch (e: Exception) {
+            android.util.Log.e("VoiceFollow", "startListening exception: ${e.message}")
             isListening = false
         }
     }
@@ -469,28 +512,40 @@ class FloatingTeleprompterService : Service() {
     }
 
     private fun handleRecognitionResults(results: Bundle?) {
-        if (results == null || scriptText.isEmpty()) return
+        if (results == null || scriptText.isEmpty()) {
+            android.util.Log.d("VoiceFollow", "handleResults: results=$results scriptEmpty=${scriptText.isEmpty()}")
+            return
+        }
 
         val matches = results.getStringArray(SpeechRecognizer.RESULTS_RECOGNITION)
             ?: results.getStringArray("results_recognition")
-            ?: return
+            ?: run {
+                android.util.Log.d("VoiceFollow", "handleResults: no matches array")
+                return
+            }
 
-        if (matches.isEmpty()) return
+        if (matches.isEmpty()) {
+            android.util.Log.d("VoiceFollow", "handleResults: matches empty")
+            return
+        }
 
         val spoken = matches[0].replace(" ", "").replace("\n", "").trim()
+        android.util.Log.d("VoiceFollow", "handleResults: spoken='$spoken' (len=${spoken.length})")
+
         if (spoken.isEmpty()) return
 
         // 在台词中查找匹配位置
         val matchPos = findMatchPosition(scriptText, spoken, lastMatchPos)
+        android.util.Log.d("VoiceFollow", "handleResults: matchPos=$matchPos lastMatchPos=$lastMatchPos")
+
         if (matchPos >= 0) {
             lastMatchPos = matchPos
             // 通知 WebView 滚动到该字符位置
-            val escapedText = scriptText.substring(0, matchPos + spoken.length)
-                .replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
-            webView.evaluateJavascript(
-                "window.AndroidBridge && window.AndroidBridge.scrollToText('$escapedText');",
-                null
-            )
+            val spokenText = scriptText.substring(0, matchPos + spoken.length)
+                .replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
+            val js = "window.AndroidBridge && window.AndroidBridge.scrollToText('$spokenText');"
+            android.util.Log.d("VoiceFollow", "calling JS: scrollToText length=${spokenText.length}")
+            webView.evaluateJavascript(js, null)
         }
     }
 

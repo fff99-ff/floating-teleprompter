@@ -267,12 +267,18 @@
       state.targetScrollPos = null;
       startHint.classList.add('hidden');
 
-      // 语音跟随由原生 SpeechRecognizer 驱动，不调用 Web Speech API
-      if (state.ttsActive && 'speechSynthesis' in window) {
-        startTTS(state.config.script);
+      // 语音跟随模式：不启动自动滚动，等原生语音识别驱动
+      // 手动模式：启动自动滚动
+      if (!state.ttsActive) {
+        startAnimation();
+      } else {
+        // 启动动画循环但只跟随 targetScrollPos，不自动滚动
+        startAnimation();
       }
 
-      startAnimation();
+      if (window.Android && window.Android.log) {
+        window.Android.log('startPlayback: ttsActive=' + state.ttsActive + ' viewH=' + state.viewHeight + ' totalH=' + state.totalHeight);
+      }
     }
 
     function pausePlayback() {
@@ -299,14 +305,17 @@
         lastTime = currentTime;
 
         if (state.isPlaying) {
-          if (state.targetScrollPos !== null) {
-            // 语音跟随模式：平滑滚动到识别到的位置
-            var diff = state.targetScrollPos - state.scrollPos;
-            if (Math.abs(diff) < 0.5) {
-              state.scrollPos = state.targetScrollPos;
-            } else {
-              state.scrollPos += diff * 0.12;
+          if (state.ttsActive) {
+            // 语音跟随模式：只跟随语音识别设置的目标位置，不自动滚动
+            if (state.targetScrollPos !== null) {
+              var diff = state.targetScrollPos - state.scrollPos;
+              if (Math.abs(diff) < 0.5) {
+                state.scrollPos = state.targetScrollPos;
+              } else {
+                state.scrollPos += diff * 0.12;
+              }
             }
+            // 不自动滚动！等待语音识别驱动
           } else {
             // 手动速度模式
             var normalizedSpeed = Math.pow(state.speed / 100, 1.5);
