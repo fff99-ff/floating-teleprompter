@@ -23,7 +23,7 @@
     <!-- 播放设置 -->
     <string name="section_playback">播放设置</string>
     <string name="setting_speed">滚动速度</string>
-    <string name="setting_tts">语音朗读</string>
+    <string name="setting_tts">语音跟随（朗读同步）</string>
     <string name="setting_tts_rate">语音速度</string>
     <string name="setting_mirror">镜像翻转</string>
 

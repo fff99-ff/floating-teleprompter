@@ -125,6 +125,73 @@
       updateConfig: function(config) {
         state.config = config;
         applyConfig(config);
+      },
+
+      // 原生语音识别调用：滚动到已朗读到的文本位置
+      scrollToText: function(spokenText) {
+        var node = content.firstChild;
+        if (!node || !node.textContent) return;
+
+        var fullText = node.textContent;
+        // 去除空格和标点后匹配
+        var cleanFull = fullText.replace(/[\s，。、！？：；]/g, '');
+        var cleanSpoken = spokenText.replace(/[\s，。、！？：；]/g, '');
+
+        if (cleanSpoken.length === 0) return;
+
+        // 取识别文本最后几个字作为搜索词
+        var searchLen = Math.min(cleanSpoken.length, 15);
+        var searchWord = cleanSpoken.substring(cleanSpoken.length - searchLen);
+
+        // 在完整文本中查找
+        var matchIdx = -1;
+        for (var i = state.scrollPos > 0 ? 0 : 0; i < cleanFull.length - searchWord.length; i++) {
+            if (cleanFull.substring(i, i + searchWord.length) === searchWord) {
+                matchIdx = i;
+                break;
+            }
+        }
+
+        if (matchIdx < 0) return;
+
+        // 将 cleanFull 中的位置映射回原始文本中的位置
+        var origPos = 0;
+        var cleanPos = 0;
+        while (cleanPos < matchIdx + searchWord.length && origPos < fullText.length) {
+            var ch = fullText[origPos];
+            if (!/[\s，。、！？：；]/.test(ch)) {
+                if (cleanPos === matchIdx) break;
+                cleanPos++;
+            }
+            origPos++;
+        }
+
+        // 使用 Range API 获取该位置的 Y 坐标
+        try {
+            var range = document.createRange();
+            range.setStart(node, Math.min(origPos, node.length));
+            range.setEnd(node, Math.min(origPos + 1, node.length));
+
+            var charRect = range.getBoundingClientRect();
+            var contentRect = content.getBoundingClientRect();
+            var relativeY = charRect.top - contentRect.top;
+
+            var viewOffset = state.viewHeight * 0.38;
+            var target = relativeY - viewOffset;
+
+            var maxScroll = Math.max(0, state.totalHeight - state.viewHeight);
+            state.targetScrollPos = Math.max(0, Math.min(target, maxScroll));
+
+            // 如果不在播放，手动启动动画
+            if (!state.isPlaying) {
+                state.isPlaying = true;
+                startAnimation();
+            }
+        } catch (e) {
+            if (window.Android && window.Android.log) {
+                window.Android.log('scrollToText error: ' + e.message);
+            }
+        }
       }
     };
 

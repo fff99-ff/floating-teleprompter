@@ -313,6 +313,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun checkOverlayPermissionAndStart() {
+        // 检查麦克风权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                requestMicrophonePermission()
+                return
+            }
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
                 AlertDialog.Builder(this)
@@ -332,6 +340,39 @@ class MainActivity : AppCompatActivity() {
             }
         } else {
             startFloatingService()
+        }
+    }
+
+    private fun requestMicrophonePermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            AlertDialog.Builder(this)
+                .setTitle("需要麦克风权限")
+                .setMessage("语音跟随功能需要麦克风权限来识别你的朗读，自动同步字幕滚动。")
+                .setPositiveButton("授权") { _, _ ->
+                    requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), MIC_PERMISSION_CODE)
+                }
+                .setNegativeButton("跳过") { _, _ ->
+                    // 跳过麦克风权限，使用手动模式
+                    prefs.edit().putBoolean("use_tts", false).apply()
+                    startFloatingService()
+                }
+                .setCancelable(false)
+                .show()
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == MIC_PERMISSION_CODE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Toast.makeText(this, "麦克风权限已授予", Toast.LENGTH_SHORT).show()
+                // 继续检查悬浮窗权限
+                checkOverlayPermissionAndStart()
+            } else {
+                Toast.makeText(this, "未授予麦克风权限，将使用手动滚动模式", Toast.LENGTH_LONG).show()
+                prefs.edit().putBoolean("use_tts", false).apply()
+                startFloatingService()
+            }
         }
     }
 
@@ -393,6 +434,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val OVERLAY_PERMISSION_CODE = 1001
+        private const val MIC_PERMISSION_CODE = 1002
 
         const val SAMPLE_TEXT = """欢迎使用悬浮提词器！
 
@@ -401,14 +443,14 @@ class MainActivity : AppCompatActivity() {
 你可以：
 1. 输入任意长度的文本
 2. 调节字体大小、颜色和背景透明度
-3. 使用语音朗读自动同步滚动
-4. 悬浮在任何应用上方
+3. 开启语音跟随，字幕会跟着你的朗读自动滚动
+4. 悬浮在任何应用上方，包括相机录像
 
 操作提示：
-• 点击播放按钮开始滚动
+• 点击播放按钮开始
+• 朗读台词，字幕自动跟随
 • 拖动顶部栏移动悬浮窗
 • 点击最小化按钮缩小为图标
-• 上下滑动屏幕调节速度
 
 祝你录制顺利！"""
     }

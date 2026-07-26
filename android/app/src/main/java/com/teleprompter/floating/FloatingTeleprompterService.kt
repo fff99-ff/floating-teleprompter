@@ -12,8 +12,12 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Bundle
 import android.os.IBinder
 import android.provider.Settings
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -24,7 +28,6 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.widget.ImageButton
-import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
@@ -59,6 +62,13 @@ class FloatingTeleprompterService : Service() {
 
     private var isMinimized = false
     private var isPlaying = false
+
+    // 语音识别
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var isListening = false
+    private var scriptText = ""
+    private var lastMatchPos = 0
+    private var useVoiceFollow = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -368,10 +378,158 @@ class FloatingTeleprompterService : Service() {
             if (isPlaying) android.R.drawable.ic_media_pause
             else android.R.drawable.ic_media_play
         )
+
+        if (isPlaying) {
+            // 检查是否开启语音跟随
+            useVoiceFollow = prefs.getBoolean("use_tts", true)
+            scriptText = prefs.getString("script_text", "") ?: ""
+            lastMatchPos = 0
+
+            if (useVoiceFollow && scriptText.isNotEmpty()) {
+                startVoiceRecognition()
+            }
+        } else {
+            stopVoiceRecognition()
+        }
+
         webView.evaluateJavascript(
             "window.AndroidBridge && window.AndroidBridge.${if (isPlaying) "play" else "pause"}();",
             null
         )
+    }
+
+    // ==================== 语音识别跟随 ====================
+    private fun startVoiceRecognition() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            Toast.makeText(this, "语音识别不可用，使用手动模式", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (speechRecognizer == null) {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+            speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {
+                    // 朗读停顿后自动重启识别
+                    if (isPlaying && useVoiceFollow) {
+                        restartListening()
+                    }
+                }
+                override fun onError(error: Int) {
+                    // 错误后延迟重启（避免抢麦克风冲突）
+                    if (isPlaying && useVoiceFollow) {
+                        android.os.Handler(mainLooper).postDelayed({
+                            if (isPlaying && useVoiceFollow) restartListening()
+                        }, 300)
+                    }
+                }
+                override fun onResults(results: Bundle?) {
+                    handleRecognitionResults(results)
+                    if (isPlaying && useVoiceFollow) {
+                        restartListening()
+                    }
+                }
+                override fun onPartialResults(partialResults: Bundle?) {
+                    handleRecognitionResults(partialResults)
+                }
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+        }
+
+        restartListening()
+    }
+
+    private fun restartListening() {
+        if (isListening) return
+        try {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            }
+            speechRecognizer?.startListening(intent)
+            isListening = true
+        } catch (e: Exception) {
+            isListening = false
+        }
+    }
+
+    private fun stopVoiceRecognition() {
+        isListening = false
+        try {
+            speechRecognizer?.stopListening()
+        } catch (e: Exception) {}
+    }
+
+    private fun handleRecognitionResults(results: Bundle?) {
+        if (results == null || scriptText.isEmpty()) return
+
+        val matches = results.getStringArray(SpeechRecognizer.RESULTS_RECOGNITION)
+            ?: results.getStringArray("results_recognition")
+            ?: return
+
+        if (matches.isEmpty()) return
+
+        val spoken = matches[0].replace(" ", "").replace("\n", "").trim()
+        if (spoken.isEmpty()) return
+
+        // 在台词中查找匹配位置
+        val matchPos = findMatchPosition(scriptText, spoken, lastMatchPos)
+        if (matchPos >= 0) {
+            lastMatchPos = matchPos
+            // 通知 WebView 滚动到该字符位置
+            val escapedText = scriptText.substring(0, matchPos + spoken.length)
+                .replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+            webView.evaluateJavascript(
+                "window.AndroidBridge && window.AndroidBridge.scrollToText('$escapedText');",
+                null
+            )
+        }
+    }
+
+    /**
+     * 在台词文本中查找识别到的语音内容位置
+     * 使用模糊匹配，从上次匹配位置开始搜索
+     */
+    private fun findMatchPosition(script: String, spoken: String, startPos: Int): Int {
+        val cleanScript = script.replace(" ", "").replace("\n", "").replace("\r", "")
+
+        // 取语音识别结果的最后几个字作为搜索词（更精确）
+        val searchLen = minOf(spoken.length, 15)
+        val searchWord = spoken.takeLast(searchLen)
+
+        // 在原始台词中搜索（从上次位置之后开始）
+        for (i in startPos until script.length - searchWord.length) {
+            var match = true
+            var scriptIdx = i
+            var spokenIdx = 0
+
+            while (scriptIdx < script.length && spokenIdx < searchWord.length) {
+                val sc = script[scriptIdx]
+                // 跳过空格和换行
+                if (sc == ' ' || sc == '\n' || sc == '\r' || sc == '\t' || sc == '，' || sc == '。' || sc == '、' || sc == '！' || sc == '？' || sc == '：' || sc == '；') {
+                    scriptIdx++
+                    continue
+                }
+                if (sc != searchWord[spokenIdx]) {
+                    match = false
+                    break
+                }
+                scriptIdx++
+                spokenIdx++
+            }
+
+            if (match && spokenIdx == searchWord.length) {
+                return i
+            }
+        }
+
+        // 如果从头搜索也找不到，返回 -1
+        return -1
     }
 
     private fun toggleMinimize() {
@@ -440,6 +598,9 @@ class FloatingTeleprompterService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        stopVoiceRecognition()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         if (::rootView.isInitialized && rootView.isAttachedToWindow) {
             windowManager.removeView(rootView)
         }
