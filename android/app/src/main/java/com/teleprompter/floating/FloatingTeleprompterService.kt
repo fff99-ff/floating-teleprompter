@@ -32,6 +32,7 @@ import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import java.util.Locale
 
 class FloatingTeleprompterService : Service() {
 
@@ -366,9 +367,10 @@ class FloatingTeleprompterService : Service() {
 
                     // 通知 WebView 滚动
                     if (scrollSpeed > 0.1f) {
+                        val speedStr = String.format(Locale.US, "%.2f", scrollSpeed)
                         mainHandler.post {
                             webView.evaluateJavascript(
-                                "window.AndroidBridge && window.AndroidBridge.scroll($scrollSpeed);",
+                                "window.AndroidBridge && window.AndroidBridge.scroll($speedStr);",
                                 null
                             )
                         }
