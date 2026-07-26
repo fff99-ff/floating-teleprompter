@@ -51,11 +51,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvLineHeight: TextView
 
     // Playback settings
-    private lateinit var seekSpeed: SeekBar
-    private lateinit var tvSpeed: TextView
-    private lateinit var switchTTS: SwitchMaterial
-    private lateinit var seekTtsRate: SeekBar
-    private lateinit var tvTtsRate: TextView
     private lateinit var switchMirror: SwitchMaterial
 
     // Color values
@@ -100,11 +95,6 @@ class MainActivity : AppCompatActivity() {
         seekLineHeight = findViewById(R.id.seekLineHeight)
         tvLineHeight = findViewById(R.id.tvLineHeight)
 
-        seekSpeed = findViewById(R.id.seekSpeed)
-        tvSpeed = findViewById(R.id.tvSpeed)
-        switchTTS = findViewById(R.id.switchTTS)
-        seekTtsRate = findViewById(R.id.seekTtsRate)
-        tvTtsRate = findViewById(R.id.tvTtsRate)
         switchMirror = findViewById(R.id.switchMirror)
     }
 
@@ -134,19 +124,6 @@ class MainActivity : AppCompatActivity() {
         val lineHeight = prefs.getInt("line_height", 180)
         seekLineHeight.progress = lineHeight - 100
         tvLineHeight.text = String.format("%.1f", lineHeight / 100.0)
-
-        // 滚动速度 (1-100, SeekBar 0-99)
-        val speed = prefs.getInt("speed", 35)
-        seekSpeed.progress = speed - 1
-        tvSpeed.text = speed.toString()
-
-        // 语音朗读
-        switchTTS.isChecked = prefs.getBoolean("use_tts", true)
-
-        // 语音速度 (0.5-3.0, SeekBar 0-25, 实际值 = (progress+5)/10)
-        val ttsRate = prefs.getInt("tts_rate", 10)
-        seekTtsRate.progress = ttsRate - 5
-        tvTtsRate.text = String.format("%.1f", ttsRate / 10.0)
 
         // 镜像
         switchMirror.isChecked = prefs.getBoolean("mirror", false)
@@ -195,33 +172,6 @@ class MainActivity : AppCompatActivity() {
                 val value = progress + 100
                 tvLineHeight.text = String.format("%.1f", value / 100.0)
                 prefs.edit().putInt("line_height", value).apply()
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-
-        // 滚动速度
-        seekSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                val value = progress + 1
-                tvSpeed.text = value.toString()
-                prefs.edit().putInt("speed", value).apply()
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-        })
-
-        // 语音朗读
-        switchTTS.setOnCheckedChangeListener { _, isChecked ->
-            prefs.edit().putBoolean("use_tts", isChecked).apply()
-        }
-
-        // 语音速度
-        seekTtsRate.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                val value = progress + 5
-                tvTtsRate.text = String.format("%.1f", value / 10.0)
-                prefs.edit().putInt("tts_rate", value).apply()
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
@@ -347,15 +297,11 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             AlertDialog.Builder(this)
                 .setTitle("需要麦克风权限")
-                .setMessage("语音跟随功能需要麦克风权限来识别你的朗读，自动同步字幕滚动。")
+                .setMessage("提词器需要麦克风权限来检测你的朗读声音，跟随朗读自动滚动字幕。")
                 .setPositiveButton("授权") { _, _ ->
                     requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), MIC_PERMISSION_CODE)
                 }
-                .setNegativeButton("跳过") { _, _ ->
-                    // 跳过麦克风权限，使用手动模式
-                    prefs.edit().putBoolean("use_tts", false).apply()
-                    startFloatingService()
-                }
+                .setNegativeButton("取消", null)
                 .setCancelable(false)
                 .show()
         }
@@ -366,12 +312,9 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == MIC_PERMISSION_CODE) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                 Toast.makeText(this, "麦克风权限已授予", Toast.LENGTH_SHORT).show()
-                // 继续检查悬浮窗权限
                 checkOverlayPermissionAndStart()
             } else {
-                Toast.makeText(this, "未授予麦克风权限，将使用手动滚动模式", Toast.LENGTH_LONG).show()
-                prefs.edit().putBoolean("use_tts", false).apply()
-                startFloatingService()
+                Toast.makeText(this, "需要麦克风权限才能跟随朗读滚动", Toast.LENGTH_LONG).show()
             }
         }
     }

@@ -25,7 +25,7 @@
       position: absolute;
       left: 0;
       right: 0;
-      padding: 40vh 16px 40vh 16px;
+      padding: 35vh 16px 35vh 16px;
       will-change: transform;
       white-space: pre-wrap;
       word-wrap: break-word;
@@ -37,16 +37,12 @@
       position: absolute;
       left: 5%;
       right: 5%;
-      top: 38%;
+      top: 35%;
       height: 2px;
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
       pointer-events: none;
       z-index: 5;
-      opacity: 0;
-      transition: opacity 0.3s;
     }
-
-    .show-guide .reading-guide { opacity: 1; }
 
     .start-hint {
       position: absolute;
@@ -62,11 +58,6 @@
     }
 
     .start-hint.hidden { opacity: 0; }
-
-    .start-hint .play-icon {
-      font-size: 32px;
-      margin-bottom: 8px;
-    }
   </style>
 </head>
 <body>
@@ -74,22 +65,16 @@
     <div class="reading-guide"></div>
     <pre class="teleprompter-content" id="content"></pre>
     <div class="start-hint" id="startHint">
-      <div class="play-icon">▶</div>
-      <div>点击播放按钮开始</div>
+      <div style="font-size:32px;margin-bottom:8px;">▶</div>
+      <div>点击播放，开始朗读即可滚动</div>
     </div>
   </div>
 
   <script>
-    // ==================== 状态 ====================
     var state = {
       isPlaying: false,
       scrollPos: 0,
-      targetScrollPos: null,
-      speed: 35,
       config: null,
-      animFrame: null,
-      ttsActive: false,
-      utterance: null,
       viewHeight: 0,
       totalHeight: 0
     };
@@ -103,142 +88,61 @@
       init: function(config) {
         state.config = config;
         applyConfig(config);
-        // 通知原生端初始化完成
         if (window.Android && window.Android.log) {
-          window.Android.log('Teleprompter initialized, text length: ' + (config.script || '').length);
+          window.Android.log('Init: textLen=' + (config.script || '').length);
         }
       },
 
       play: function() {
-        if (!state.config) return;
-        startPlayback();
+        state.viewHeight = teleprompter.clientHeight;
+        state.totalHeight = content.scrollHeight;
+        if (state.scrollPos >= state.totalHeight - state.viewHeight && state.scrollPos > 0) {
+          state.scrollPos = 0;
+        }
+        state.isPlaying = true;
+        startHint.classList.add('hidden');
+        startRenderLoop();
+        if (window.Android && window.Android.log) {
+          window.Android.log('Play: viewH=' + state.viewHeight + ' totalH=' + state.totalHeight);
+        }
       },
 
       pause: function() {
-        pausePlayback();
+        state.isPlaying = false;
       },
 
-      setSpeed: function(speed) {
-        state.speed = speed;
+      // 由原生音量检测驱动：speed 为每帧滚动像素
+      scroll: function(speed) {
+        if (!state.isPlaying) return;
+        state.scrollPos += speed;
+        var maxScroll = Math.max(0, state.totalHeight - state.viewHeight);
+        if (state.scrollPos >= maxScroll) {
+          state.scrollPos = maxScroll;
+          state.isPlaying = false;
+          if (window.Android && window.Android.onPlaybackEnded) {
+            window.Android.onPlaybackEnded();
+          }
+        }
       },
 
       updateConfig: function(config) {
         state.config = config;
         applyConfig(config);
-      },
-
-      // 原生语音识别调用：滚动到已朗读到的文本位置
-      scrollToText: function(spokenText) {
-        var node = content.firstChild;
-        if (!node || !node.textContent) return;
-
-        var fullText = node.textContent;
-        // 去除空格和标点后匹配
-        var cleanFull = fullText.replace(/[\s，。、！？：；]/g, '');
-        var cleanSpoken = spokenText.replace(/[\s，。、！？：；]/g, '');
-
-        if (cleanSpoken.length === 0) return;
-
-        // 取识别文本最后几个字作为搜索词
-        var searchLen = Math.min(cleanSpoken.length, 10);
-        var searchWord = cleanSpoken.substring(cleanSpoken.length - searchLen);
-
-        // 在完整文本中查找，优先从当前位置附近搜索
-        var matchIdx = -1;
-        // 估算当前在 cleanFull 中的位置
-        var currentCleanPos = 0;
-        var origPosEstimate = 0;
-        for (var i = 0; i < fullText.length && origPosEstimate < state.scrollPos; i++) {
-            var ch = fullText[i];
-            if (!/[\s，。、！？：；]/.test(ch)) currentCleanPos++;
-            origPosEstimate++;
-        }
-
-        // 从当前位置开始往后搜索
-        for (var i = currentCleanPos; i <= cleanFull.length - searchWord.length; i++) {
-            if (cleanFull.substring(i, i + searchWord.length) === searchWord) {
-                matchIdx = i;
-                break;
-            }
-        }
-
-        // 如果从当前位置找不到，从头搜索
-        if (matchIdx < 0) {
-            for (var i = 0; i < currentCleanPos && i <= cleanFull.length - searchWord.length; i++) {
-                if (cleanFull.substring(i, i + searchWord.length) === searchWord) {
-                    matchIdx = i;
-                    break;
-                }
-            }
-        }
-
-        if (matchIdx < 0) return;
-
-        // 将 cleanFull 中的位置映射回原始文本中的位置
-        var origPos = 0;
-        var cleanPos = 0;
-        while (cleanPos < matchIdx && origPos < fullText.length) {
-            var ch = fullText[origPos];
-            if (!/[\s，。、！？：；]/.test(ch)) {
-                cleanPos++;
-            }
-            origPos++;
-        }
-
-        if (window.Android && window.Android.log) {
-            window.Android.log('scrollToText: match at cleanPos=' + matchIdx + ' origPos=' + origPos);
-        }
-
-        // 使用 Range API 获取该位置的 Y 坐标
-        try {
-            var range = document.createRange();
-            range.setStart(node, Math.min(origPos, node.length));
-            range.setEnd(node, Math.min(origPos + 1, node.length));
-
-            var charRect = range.getBoundingClientRect();
-            var contentRect = content.getBoundingClientRect();
-            var relativeY = charRect.top - contentRect.top;
-
-            var viewOffset = state.viewHeight * 0.35;
-            var target = relativeY - viewOffset;
-
-            var maxScroll = Math.max(0, state.totalHeight - state.viewHeight);
-            state.targetScrollPos = Math.max(0, Math.min(target, maxScroll));
-
-            if (window.Android && window.Android.log) {
-                window.Android.log('scrollToText: target=' + state.targetScrollPos + ' current=' + state.scrollPos);
-            }
-        } catch (e) {
-            if (window.Android && window.Android.log) {
-                window.Android.log('scrollToText error: ' + e.message);
-            }
-        }
       }
     };
 
-    // ==================== 配置应用 ====================
     function applyConfig(config) {
       content.style.fontSize = config.fontSize + 'px';
       content.style.color = config.fontColor;
       content.style.lineHeight = config.lineHeight;
       content.textContent = config.script || '';
 
-      // 背景色 + 透明度
       var rgba = hexToRgba(config.bgColor, config.bgOpacity);
       document.body.style.backgroundColor = rgba;
       teleprompter.style.backgroundColor = rgba;
 
-      // 镜像
       content.style.transform = config.mirror ? 'scaleX(-1)' : '';
 
-      state.speed = config.speed;
-      // 语音跟随模式：不依赖 Web Speech API，由原生 SpeechRecognizer 驱动
-      state.ttsActive = config.useTts;
-
-      // 阅读引导线
-      teleprompter.classList.toggle('show-guide', state.ttsActive);
-
-      // 重新计算尺寸
       setTimeout(function() {
         state.viewHeight = teleprompter.clientHeight;
         state.totalHeight = content.scrollHeight;
@@ -252,202 +156,16 @@
       return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + alpha + ')';
     }
 
-    // ==================== 播放控制 ====================
-    function startPlayback() {
-      if (!state.config) return;
-
-      state.viewHeight = teleprompter.clientHeight;
-      state.totalHeight = content.scrollHeight;
-
-      if (state.scrollPos >= state.totalHeight - state.viewHeight && state.scrollPos > 0) {
-        state.scrollPos = 0;
-      }
-
-      state.isPlaying = true;
-      state.targetScrollPos = null;
-      startHint.classList.add('hidden');
-
-      // 语音跟随模式：不启动自动滚动，等原生语音识别驱动
-      // 手动模式：启动自动滚动
-      if (!state.ttsActive) {
-        startAnimation();
-      } else {
-        // 启动动画循环但只跟随 targetScrollPos，不自动滚动
-        startAnimation();
-      }
-
-      if (window.Android && window.Android.log) {
-        window.Android.log('startPlayback: ttsActive=' + state.ttsActive + ' viewH=' + state.viewHeight + ' totalH=' + state.totalHeight);
-      }
-    }
-
-    function pausePlayback() {
-      state.isPlaying = false;
-      if (state.ttsActive && 'speechSynthesis' in window) {
-        window.speechSynthesis.pause();
-      }
-    }
-
-    function togglePlay() {
-      if (state.isPlaying) {
-        pausePlayback();
-      } else {
-        startPlayback();
-      }
-    }
-
-    // ==================== 动画循环 ====================
-    function startAnimation() {
-      var lastTime = performance.now();
-
-      function loop(currentTime) {
-        var delta = currentTime - lastTime;
-        lastTime = currentTime;
-
-        if (state.isPlaying) {
-          if (state.ttsActive) {
-            // 语音跟随模式：只跟随语音识别设置的目标位置，不自动滚动
-            if (state.targetScrollPos !== null) {
-              var diff = state.targetScrollPos - state.scrollPos;
-              if (Math.abs(diff) < 0.5) {
-                state.scrollPos = state.targetScrollPos;
-              } else {
-                state.scrollPos += diff * 0.12;
-              }
-            }
-            // 不自动滚动！等待语音识别驱动
-          } else {
-            // 手动速度模式
-            var normalizedSpeed = Math.pow(state.speed / 100, 1.5);
-            var pixelsPerSecond = 15 + normalizedSpeed * 400;
-            state.scrollPos += (pixelsPerSecond * delta) / 1000;
-          }
-
-          var maxScroll = Math.max(0, state.totalHeight - state.viewHeight);
-          if (state.scrollPos >= maxScroll) {
-            state.scrollPos = maxScroll;
-            state.isPlaying = false;
-            stopTTS();
-            // 通知原生端播放结束
-            if (window.Android && window.Android.onPlaybackEnded) {
-              window.Android.onPlaybackEnded();
-            }
-          }
-        }
-
-        // 应用变换
+    // ==================== 渲染循环 ====================
+    var animFrame = null;
+    function startRenderLoop() {
+      if (animFrame) return;
+      function loop() {
         var mirror = state.config && state.config.mirror;
         content.style.transform = 'translateY(-' + state.scrollPos + 'px)' + (mirror ? ' scaleX(-1)' : '');
-
-        state.animFrame = requestAnimationFrame(loop);
+        animFrame = requestAnimationFrame(loop);
       }
-
-      state.animFrame = requestAnimationFrame(loop);
-    }
-
-    // ==================== TTS 语音同步 ====================
-    function startTTS(text) {
-      if (!('speechSynthesis' in window)) return;
-
-      window.speechSynthesis.cancel();
-
-      var utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'zh-CN';
-      utterance.rate = state.config.ttsRate || 1.0;
-      utterance.pitch = 1;
-
-      // 获取中文语音
-      var voices = window.speechSynthesis.getVoices();
-      var zhVoice = null;
-      for (var i = 0; i < voices.length; i++) {
-        if (voices[i].lang.indexOf('zh') >= 0 || voices[i].lang.indexOf('CN') >= 0) {
-          zhVoice = voices[i];
-          break;
-        }
-      }
-      if (zhVoice) utterance.voice = zhVoice;
-
-      utterance.onboundary = function(event) {
-        if (event.name === 'word' || event.name === 'sentence') {
-          syncToCharIndex(event.charIndex);
-        }
-      };
-
-      utterance.onend = function() {
-        state.isPlaying = false;
-        if (window.Android && window.Android.onPlaybackEnded) {
-          window.Android.onPlaybackEnded();
-        }
-      };
-
-      window.speechSynthesis.speak(utterance);
-      state.utterance = utterance;
-    }
-
-    function stopTTS() {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
-      state.utterance = null;
-    }
-
-    function syncToCharIndex(charIndex) {
-      var node = content.firstChild;
-      if (!node || charIndex >= node.length) return;
-
-      try {
-        var range = document.createRange();
-        range.setStart(node, charIndex);
-        range.setEnd(node, Math.min(charIndex + 1, node.length));
-
-        var charRect = range.getBoundingClientRect();
-        var contentRect = content.getBoundingClientRect();
-        var relativeY = charRect.top - contentRect.top;
-
-        var viewOffset = state.viewHeight * 0.38;
-        var target = relativeY - viewOffset;
-
-        var maxScroll = Math.max(0, state.totalHeight - state.viewHeight);
-        state.targetScrollPos = Math.max(0, Math.min(target, maxScroll));
-      } catch (e) {}
-    }
-
-    // ==================== 触摸控制 ====================
-    var touchStartY = 0;
-    var touchStartSpeed = 0;
-    var touchStartTime = 0;
-
-    teleprompter.addEventListener('touchstart', function(e) {
-      touchStartY = e.touches[0].clientY;
-      touchStartSpeed = state.speed;
-      touchStartTime = Date.now();
-    }, { passive: true });
-
-    teleprompter.addEventListener('touchmove', function(e) {
-      if (state.ttsActive) return;
-      var deltaY = touchStartY - e.touches[0].clientY;
-      if (Math.abs(deltaY) > 10) {
-        var newSpeed = Math.round(touchStartSpeed + deltaY * 0.15);
-        newSpeed = Math.max(1, Math.min(100, newSpeed));
-        state.speed = newSpeed;
-      }
-    }, { passive: true });
-
-    teleprompter.addEventListener('touchend', function(e) {
-      var deltaY = touchStartY - e.changedTouches[0].clientY;
-      var deltaTime = Date.now() - touchStartTime;
-      if (Math.abs(deltaY) < 10 && deltaTime < 250) {
-        togglePlay();
-      }
-    }, { passive: true });
-
-    // ==================== TTS 语音列表加载 ====================
-    if ('speechSynthesis' in window && 'onvoiceschanged' in window.speechSynthesis) {
-      window.speechSynthesis.onvoiceschanged = function() {
-        if (window.Android && window.Android.log) {
-          window.Android.log('TTS voices loaded: ' + window.speechSynthesis.getVoices().length);
-        }
-      };
+      animFrame = requestAnimationFrame(loop);
     }
 
     // ==================== 窗口大小变化 ====================

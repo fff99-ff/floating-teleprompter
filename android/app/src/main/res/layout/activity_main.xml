@@ -312,91 +312,14 @@
                     android:textSize="13sp"
                     android:textStyle="bold" />
 
-                <!-- 滚动速度 -->
-                <LinearLayout
+                <!-- 语音跟随说明 -->
+                <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingVertical="8dp">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/setting_speed"
-                        android:textSize="15sp" />
-
-                    <SeekBar
-                        android:id="@+id/seekSpeed"
-                        android:layout_width="120dp"
-                        android:layout_height="wrap_content"
-                        android:max="99"
-                        android:progress="34" />
-
-                    <TextView
-                        android:id="@+id/tvSpeed"
-                        android:layout_width="40dp"
-                        android:layout_height="wrap_content"
-                        android:gravity="end"
-                        android:text="35"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="14sp" />
-                </LinearLayout>
-
-                <!-- 语音朗读 -->
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingVertical="8dp">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/setting_tts"
-                        android:textSize="15sp" />
-
-                    <com.google.android.material.switchmaterial.SwitchMaterial
-                        android:id="@+id/switchTTS"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:checked="true" />
-                </LinearLayout>
-
-                <!-- 语音速度 -->
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
-                    android:paddingVertical="8dp">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/setting_tts_rate"
-                        android:textSize="15sp" />
-
-                    <SeekBar
-                        android:id="@+id/seekTtsRate"
-                        android:layout_width="120dp"
-                        android:layout_height="wrap_content"
-                        android:max="25"
-                        android:progress="5" />
-
-                    <TextView
-                        android:id="@+id/tvTtsRate"
-                        android:layout_width="40dp"
-                        android:layout_height="wrap_content"
-                        android:gravity="end"
-                        android:text="1.0"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="14sp" />
-                </LinearLayout>
+                    android:paddingVertical="8dp"
+                    android:text="🎤 字幕跟随你的朗读声音自动滚动\n说话时滚动，停顿时停止"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="14sp" />
 
                 <!-- 镜像翻转 -->
                 <LinearLayout

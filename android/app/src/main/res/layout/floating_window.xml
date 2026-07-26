@@ -52,63 +52,37 @@
         android:layout_height="0dp"
         android:layout_weight="1" />
 
-    <!-- 底部控制栏 -->
+    <!-- 底部控制栏：状态 + 播放按钮 -->
     <LinearLayout
         android:id="@+id/bottomBar"
         android:layout_width="match_parent"
-        android:layout_height="48dp"
+        android:layout_height="44dp"
         android:background="#80000000"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="8dp">
-
-        <ImageButton
-            android:id="@+id/btnSlower"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:src="@android:drawable/ic_media_previous"
-            android:contentDescription="减速"
-            android:tint="#FFFFFF" />
+        android:paddingHorizontal="12dp">
 
         <TextView
-            android:id="@+id/tvSpeed"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingHorizontal="8dp"
-            android:text="35"
-            android:textColor="#FFFFFF"
-            android:textSize="13sp" />
-
-        <SeekBar
-            android:id="@+id/seekSpeed"
+            android:id="@+id/tvStatus"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:max="99"
-            android:progress="34" />
-
-        <ImageButton
-            android:id="@+id/btnFaster"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
-            android:background="?android:attr/selectableItemBackgroundBorderless"
-            android:src="@android:drawable/ic_media_next"
-            android:contentDescription="加速"
-            android:tint="#FFFFFF" />
+            android:text="就绪"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            android:paddingHorizontal="4dp" />
 
         <ImageButton
             android:id="@+id/btnPlayPause"
             android:layout_width="40dp"
             android:layout_height="40dp"
-            android:layout_marginStart="8dp"
             android:background="@drawable/btn_primary_bg"
             android:src="@android:drawable/ic_media_play"
             android:contentDescription="播放/暂停"
             android:tint="#FFFFFF" />
     </LinearLayout>
 
-    <!-- 最小化后的圆形按钮（默认隐藏） -->
+    <!-- 最小化后的圆形按钮 -->
     <ImageButton
         android:id="@+id/btnExpand"
         android:layout_width="56dp"
