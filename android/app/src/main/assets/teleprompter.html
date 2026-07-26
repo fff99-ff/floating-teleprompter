@@ -140,15 +140,35 @@
         if (cleanSpoken.length === 0) return;
 
         // 取识别文本最后几个字作为搜索词
-        var searchLen = Math.min(cleanSpoken.length, 15);
+        var searchLen = Math.min(cleanSpoken.length, 10);
         var searchWord = cleanSpoken.substring(cleanSpoken.length - searchLen);
 
-        // 在完整文本中查找
+        // 在完整文本中查找，优先从当前位置附近搜索
         var matchIdx = -1;
-        for (var i = state.scrollPos > 0 ? 0 : 0; i < cleanFull.length - searchWord.length; i++) {
+        // 估算当前在 cleanFull 中的位置
+        var currentCleanPos = 0;
+        var origPosEstimate = 0;
+        for (var i = 0; i < fullText.length && origPosEstimate < state.scrollPos; i++) {
+            var ch = fullText[i];
+            if (!/[\s，。、！？：；]/.test(ch)) currentCleanPos++;
+            origPosEstimate++;
+        }
+
+        // 从当前位置开始往后搜索
+        for (var i = currentCleanPos; i <= cleanFull.length - searchWord.length; i++) {
             if (cleanFull.substring(i, i + searchWord.length) === searchWord) {
                 matchIdx = i;
                 break;
+            }
+        }
+
+        // 如果从当前位置找不到，从头搜索
+        if (matchIdx < 0) {
+            for (var i = 0; i < currentCleanPos && i <= cleanFull.length - searchWord.length; i++) {
+                if (cleanFull.substring(i, i + searchWord.length) === searchWord) {
+                    matchIdx = i;
+                    break;
+                }
             }
         }
 
@@ -157,13 +177,16 @@
         // 将 cleanFull 中的位置映射回原始文本中的位置
         var origPos = 0;
         var cleanPos = 0;
-        while (cleanPos < matchIdx + searchWord.length && origPos < fullText.length) {
+        while (cleanPos < matchIdx && origPos < fullText.length) {
             var ch = fullText[origPos];
             if (!/[\s，。、！？：；]/.test(ch)) {
-                if (cleanPos === matchIdx) break;
                 cleanPos++;
             }
             origPos++;
+        }
+
+        if (window.Android && window.Android.log) {
+            window.Android.log('scrollToText: match at cleanPos=' + matchIdx + ' origPos=' + origPos);
         }
 
         // 使用 Range API 获取该位置的 Y 坐标
@@ -176,16 +199,14 @@
             var contentRect = content.getBoundingClientRect();
             var relativeY = charRect.top - contentRect.top;
 
-            var viewOffset = state.viewHeight * 0.38;
+            var viewOffset = state.viewHeight * 0.35;
             var target = relativeY - viewOffset;
 
             var maxScroll = Math.max(0, state.totalHeight - state.viewHeight);
             state.targetScrollPos = Math.max(0, Math.min(target, maxScroll));
 
-            // 如果不在播放，手动启动动画
-            if (!state.isPlaying) {
-                state.isPlaying = true;
-                startAnimation();
+            if (window.Android && window.Android.log) {
+                window.Android.log('scrollToText: target=' + state.targetScrollPos + ' current=' + state.scrollPos);
             }
         } catch (e) {
             if (window.Android && window.Android.log) {
@@ -211,7 +232,8 @@
       content.style.transform = config.mirror ? 'scaleX(-1)' : '';
 
       state.speed = config.speed;
-      state.ttsActive = config.useTts && 'speechSynthesis' in window;
+      // 语音跟随模式：不依赖 Web Speech API，由原生 SpeechRecognizer 驱动
+      state.ttsActive = config.useTts;
 
       // 阅读引导线
       teleprompter.classList.toggle('show-guide', state.ttsActive);
@@ -242,9 +264,11 @@
       }
 
       state.isPlaying = true;
+      state.targetScrollPos = null;
       startHint.classList.add('hidden');
 
-      if (state.ttsActive) {
+      // 语音跟随由原生 SpeechRecognizer 驱动，不调用 Web Speech API
+      if (state.ttsActive && 'speechSynthesis' in window) {
         startTTS(state.config.script);
       }
 
@@ -275,16 +299,16 @@
         lastTime = currentTime;
 
         if (state.isPlaying) {
-          if (state.ttsActive && state.targetScrollPos !== null) {
-            // TTS 同步：平滑跟随
+          if (state.targetScrollPos !== null) {
+            // 语音跟随模式：平滑滚动到识别到的位置
             var diff = state.targetScrollPos - state.scrollPos;
             if (Math.abs(diff) < 0.5) {
               state.scrollPos = state.targetScrollPos;
             } else {
-              state.scrollPos += diff * 0.15;
+              state.scrollPos += diff * 0.12;
             }
           } else {
-            // 手动速度
+            // 手动速度模式
             var normalizedSpeed = Math.pow(state.speed / 100, 1.5);
             var pixelsPerSecond = 15 + normalizedSpeed * 400;
             state.scrollPos += (pixelsPerSecond * delta) / 1000;

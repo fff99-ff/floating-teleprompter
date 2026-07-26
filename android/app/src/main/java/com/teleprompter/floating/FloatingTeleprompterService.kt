@@ -413,12 +413,14 @@ class FloatingTeleprompterService : Service() {
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {
+                    isListening = false
                     // 朗读停顿后自动重启识别
                     if (isPlaying && useVoiceFollow) {
                         restartListening()
                     }
                 }
                 override fun onError(error: Int) {
+                    isListening = false
                     // 错误后延迟重启（避免抢麦克风冲突）
                     if (isPlaying && useVoiceFollow) {
                         android.os.Handler(mainLooper).postDelayed({
@@ -427,6 +429,7 @@ class FloatingTeleprompterService : Service() {
                     }
                 }
                 override fun onResults(results: Bundle?) {
+                    isListening = false
                     handleRecognitionResults(results)
                     if (isPlaying && useVoiceFollow) {
                         restartListening()
@@ -461,7 +464,7 @@ class FloatingTeleprompterService : Service() {
     private fun stopVoiceRecognition() {
         isListening = false
         try {
-            speechRecognizer?.stopListening()
+            speechRecognizer?.cancel()
         } catch (e: Exception) {}
     }
 
