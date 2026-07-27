@@ -1,0 +1,709 @@
+﻿diff --git a/android/app/src/main/java/com/teleprompter/floating/FloatingTeleprompterService.kt b/android/app/src/main/java/com/teleprompter/floating/FloatingTeleprompterService.kt
+index 7ef9ab7..a6b6ac0 100644
+--- a/android/app/src/main/java/com/teleprompter/floating/FloatingTeleprompterService.kt
++++ b/android/app/src/main/java/com/teleprompter/floating/FloatingTeleprompterService.kt
+@@ -11,13 +11,14 @@ import android.content.SharedPreferences
+ import android.content.res.Configuration
+ import android.graphics.Color
+ import android.graphics.PixelFormat
++import android.media.AudioFormat
++import android.media.AudioRecord
++import android.media.MediaRecorder
+ import android.os.Build
+-import android.os.Bundle
+ import android.os.IBinder
++import android.os.Handler
++import android.os.Looper
+ import android.provider.Settings
+-import android.speech.RecognitionListener
+-import android.speech.RecognizerIntent
+-import android.speech.SpeechRecognizer
+ import android.util.DisplayMetrics
+ import android.view.Gravity
+ import android.view.LayoutInflater
+@@ -28,7 +29,6 @@ import android.webkit.JavascriptInterface
+ import android.webkit.WebChromeClient
+ import android.webkit.WebView
+ import android.widget.ImageButton
+-import android.widget.SeekBar
+ import android.widget.TextView
+ import android.widget.Toast
+ import androidx.core.app.NotificationCompat
+@@ -41,6 +41,11 @@ class FloatingTeleprompterService : Service() {
+         const val CHANNEL_ID = "floating_teleprompter_channel"
+         const val NOTIFICATION_ID = 1001
+         var isRunning = false
++
++        // 音频采样参数
++        private const val SAMPLE_RATE = 44100
++        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
++        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+     }
+ 
+     private lateinit var windowManager: WindowManager
+@@ -55,20 +60,26 @@ class FloatingTeleprompterService : Service() {
+     private lateinit var btnClose: ImageButton
+     private lateinit var btnExpand: ImageButton
+     private lateinit var btnPlayPause: ImageButton
+-    private lateinit var btnSlower: ImageButton
+-    private lateinit var btnFaster: ImageButton
+-    private lateinit var seekSpeed: SeekBar
+-    private lateinit var tvSpeed: TextView
++    private lateinit var tvStatus: TextView
+ 
+     private var isMinimized = false
+     private var isPlaying = false
+ 
+-    // 语音识别
+-    private var speechRecognizer: SpeechRecognizer? = null
+-    private var isListening = false
+-    private var scriptText = ""
+-    private var lastMatchPos = 0
+-    private var useVoiceFollow = false
++    // 麦克风音量检测
++    private var audioRecord: AudioRecord? = null
++    private var isRecording = false
++    private var recordThread: Thread? = null
++    private var bufferSize = 0
++    private var silenceCount = 0  // 连续静默帧计数
++    private val mainHandler = Handler(Looper.getMainLooper())
++
++    // 滚动控制
++    private var scrollSpeed = 0f  // 当前滚动速度（像素/帧）
++    private var targetSpeed = 0f  // 目标速度
++    private val BASE_SPEED = 2.5f  // 基础滚动速度
++    private val SPEED_SMOOTHING = 0.15f  // 速度平滑系数
++    private val VOLUME_THRESHOLD = 800f  // 说话音量阈值
++    private val VOLUME_HIGH = 8000f  // 大声说话阈值
+ 
+     override fun onBind(intent: Intent?): IBinder? = null
+ 
+@@ -78,6 +89,11 @@ class FloatingTeleprompterService : Service() {
+         prefs = getSharedPreferences("teleprompter_settings", Context.MODE_PRIVATE)
+         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+         createNotificationChannel()
++
++        bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
++        if (bufferSize == AudioRecord.ERROR || bufferSize == AudioRecord.ERROR_BAD_VALUE) {
++            bufferSize = SAMPLE_RATE * 2  // fallback
++        }
+     }
+ 
+     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+@@ -86,12 +102,6 @@ class FloatingTeleprompterService : Service() {
+                 stopSelf()
+                 return START_NOT_STICKY
+             }
+-            ACTION_START -> {
+-                startForeground(NOTIFICATION_ID, createNotification())
+-                if (!::rootView.isInitialized) {
+-                    showFloatingWindow()
+-                }
+-            }
+             else -> {
+                 startForeground(NOTIFICATION_ID, createNotification())
+                 if (!::rootView.isInitialized) {
+@@ -177,15 +187,7 @@ class FloatingTeleprompterService : Service() {
+         btnClose = rootView.findViewById(R.id.btnClose)
+         btnExpand = rootView.findViewById(R.id.btnExpand)
+         btnPlayPause = rootView.findViewById(R.id.btnPlayPause)
+-        btnSlower = rootView.findViewById(R.id.btnSlower)
+-        btnFaster = rootView.findViewById(R.id.btnFaster)
+-        seekSpeed = rootView.findViewById(R.id.seekSpeed)
+-        tvSpeed = rootView.findViewById(R.id.tvSpeed)
+-
+-        // 初始化速度
+-        val speed = prefs.getInt("speed", 35)
+-        seekSpeed.progress = speed - 1
+-        tvSpeed.text = speed.toString()
++        tvStatus = rootView.findViewById(R.id.tvStatus)
+     }
+ 
+     private fun setupWebView() {
+@@ -200,13 +202,9 @@ class FloatingTeleprompterService : Service() {
+         webView.webChromeClient = WebChromeClient()
+         webView.setBackgroundColor(Color.TRANSPARENT)
+ 
+-        // 添加 JS 接口
+         webView.addJavascriptInterface(WebAppInterface(), "Android")
+-
+-        // 加载 assets 中的 HTML
+         webView.loadUrl("file:///android_asset/teleprompter.html")
+ 
+-        // 应用设置到 WebView
+         webView.postDelayed({ applySettingsToWebView() }, 500)
+     }
+ 
+@@ -217,9 +215,6 @@ class FloatingTeleprompterService : Service() {
+         val bgColor = prefs.getString("bg_color", "#000000")
+         val bgOpacity = prefs.getInt("bg_opacity", 80)
+         val lineHeight = prefs.getInt("line_height", 180) / 100.0
+-        val speed = prefs.getInt("speed", 35)
+-        val useTts = prefs.getBoolean("use_tts", true)
+-        val ttsRate = prefs.getInt("tts_rate", 10) / 10.0
+         val mirror = prefs.getBoolean("mirror", false)
+ 
+         val escapedScript = script.replace("\\", "\\\\")
+@@ -235,9 +230,6 @@ class FloatingTeleprompterService : Service() {
+                 bgColor: '$bgColor',
+                 bgOpacity: ${bgOpacity / 100.0},
+                 lineHeight: $lineHeight,
+-                speed: $speed,
+-                useTts: $useTts,
+-                ttsRate: $ttsRate,
+                 mirror: $mirror
+             });
+         """.trimIndent()
+@@ -246,12 +238,10 @@ class FloatingTeleprompterService : Service() {
+     }
+ 
+     private fun setupTouchListeners() {
+-        // 拖动悬浮窗
+         var initialX = 0
+         var initialY = 0
+         var initialTouchX = 0f
+         var initialTouchY = 0f
+-        var isDragging = false
+ 
+         topBar.setOnTouchListener { _, event ->
+             when (event.action) {
+@@ -260,64 +250,27 @@ class FloatingTeleprompterService : Service() {
+                     initialY = layoutParams.y
+                     initialTouchX = event.rawX
+                     initialTouchY = event.rawY
+-                    isDragging = false
+                     true
+                 }
+                 MotionEvent.ACTION_MOVE -> {
+                     val dx = event.rawX - initialTouchX
+                     val dy = event.rawY - initialTouchY
+-                    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+-                        isDragging = true
+-                    }
+                     layoutParams.x = initialX + dx.toInt()
+                     layoutParams.y = initialY + dy.toInt()
+                     windowManager.updateViewLayout(rootView, layoutParams)
+                     true
+                 }
+-                MotionEvent.ACTION_UP -> {
+-                    true
+-                }
++                MotionEvent.ACTION_UP -> true
+                 else -> false
+             }
+         }
+ 
+-        // WebView 上的触摸事件：点击暂停/继续，滑动调速
+-        var touchStartY = 0f
+-        var touchStartSpeed = 0
+-        var touchStartTime = 0L
+-        var isTouchingWebView = false
+-
++        // WebView 点击暂停/继续
+         webView.setOnTouchListener { _, event ->
+             when (event.action) {
+-                MotionEvent.ACTION_DOWN -> {
+-                    isTouchingWebView = true
+-                    touchStartY = event.rawY
+-                    touchStartSpeed = seekSpeed.progress + 1
+-                    touchStartTime = System.currentTimeMillis()
+-                    true
+-                }
+-                MotionEvent.ACTION_MOVE -> {
+-                    val useTts = prefs.getBoolean("use_tts", true)
+-                    if (useTts) return@setOnTouchListener true
+-
+-                    val deltaY = touchStartY - event.rawY
+-                    if (Math.abs(deltaY) > 10) {
+-                        val newSpeed = (touchStartSpeed + deltaY * 0.15).toInt()
+-                            .coerceIn(1, 100)
+-                        seekSpeed.progress = newSpeed - 1
+-                        tvSpeed.text = newSpeed.toString()
+-                        prefs.edit().putInt("speed", newSpeed).apply()
+-                        webView.evaluateJavascript("window.AndroidBridge && window.AndroidBridge.setSpeed($newSpeed);", null)
+-                    }
+-                    true
+-                }
++                MotionEvent.ACTION_DOWN -> true
+                 MotionEvent.ACTION_UP -> {
+-                    val deltaY = touchStartY - event.rawY
+-                    val deltaTime = System.currentTimeMillis() - touchStartTime
+-                    if (Math.abs(deltaY) < 10 && deltaTime < 250) {
+-                        togglePlay()
+-                    }
+-                    isTouchingWebView = false
++                    togglePlay()
+                     true
+                 }
+                 else -> false
+@@ -326,50 +279,10 @@ class FloatingTeleprompterService : Service() {
+     }
+ 
+     private fun setupControlListeners() {
+-        btnClose.setOnClickListener {
+-            stopSelf()
+-        }
+-
+-        btnMinimize.setOnClickListener {
+-            toggleMinimize()
+-        }
+-
+-        btnExpand.setOnClickListener {
+-            toggleMinimize()
+-        }
+-
+-        btnPlayPause.setOnClickListener {
+-            togglePlay()
+-        }
+-
+-        btnSlower.setOnClickListener {
+-            val newSpeed = (seekSpeed.progress + 1 - 5).coerceIn(1, 100)
+-            seekSpeed.progress = newSpeed - 1
+-            tvSpeed.text = newSpeed.toString()
+-            prefs.edit().putInt("speed", newSpeed).apply()
+-            webView.evaluateJavascript("window.AndroidBridge && window.AndroidBridge.setSpeed($newSpeed);", null)
+-        }
+-
+-        btnFaster.setOnClickListener {
+-            val newSpeed = (seekSpeed.progress + 1 + 5).coerceIn(1, 100)
+-            seekSpeed.progress = newSpeed - 1
+-            tvSpeed.text = newSpeed.toString()
+-            prefs.edit().putInt("speed", newSpeed).apply()
+-            webView.evaluateJavascript("window.AndroidBridge && window.AndroidBridge.setSpeed($newSpeed);", null)
+-        }
+-
+-        seekSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+-                val speed = progress + 1
+-                tvSpeed.text = speed.toString()
+-                if (fromUser) {
+-                    prefs.edit().putInt("speed", speed).apply()
+-                    webView.evaluateJavascript("window.AndroidBridge && window.AndroidBridge.setSpeed($speed);", null)
+-                }
+-            }
+-            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+-            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+-        })
++        btnClose.setOnClickListener { stopSelf() }
++        btnMinimize.setOnClickListener { toggleMinimize() }
++        btnExpand.setOnClickListener { toggleMinimize() }
++        btnPlayPause.setOnClickListener { togglePlay() }
+     }
+ 
+     private fun togglePlay() {
+@@ -379,215 +292,113 @@ class FloatingTeleprompterService : Service() {
+             else android.R.drawable.ic_media_play
+         )
+ 
+-        android.util.Log.d("VoiceFollow", "togglePlay: isPlaying=$isPlaying")
+-
+         if (isPlaying) {
+-            // 检查是否开启语音跟随
+-            useVoiceFollow = prefs.getBoolean("use_tts", true)
+-            scriptText = prefs.getString("script_text", "") ?: ""
+-            lastMatchPos = 0
+-
+-            android.util.Log.d("VoiceFollow", "togglePlay: useVoiceFollow=$useVoiceFollow scriptLen=${scriptText.length}")
+-
+-            if (useVoiceFollow && scriptText.isNotEmpty()) {
+-                startVoiceRecognition()
+-            }
++            tvStatus.text = "聆听中..."
++            tvStatus.setBackgroundColor(0x804CAF50)
++            startVoiceDetection()
++            webView.evaluateJavascript("window.AndroidBridge && window.AndroidBridge.play();", null)
+         } else {
+-            stopVoiceRecognition()
+-        }
+-
+-        webView.evaluateJavascript(
+-            "window.AndroidBridge && window.AndroidBridge.${if (isPlaying) "play" else "pause"}();",
+-            null
+-        )
+-    }
+-
+-    // ==================== 语音识别跟随 ====================
+-    private fun startVoiceRecognition() {
+-        android.util.Log.d("VoiceFollow", "startVoiceRecognition called, isPlaying=$isPlaying")
+-
+-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+-            android.util.Log.e("VoiceFollow", "SpeechRecognizer not available")
+-            Toast.makeText(this, "语音识别不可用，使用手动模式", Toast.LENGTH_SHORT).show()
+-            useVoiceFollow = false
+-            return
++            tvStatus.text = "已暂停"
++            tvStatus.setBackgroundColor(0x80FF9800)
++            stopVoiceDetection()
++            webView.evaluateJavascript("window.AndroidBridge && window.AndroidBridge.pause();", null)
+         }
+-
+-        // 每次都重新创建 SpeechRecognizer，避免状态残留
+-        speechRecognizer?.destroy()
+-        speechRecognizer = null
+-
+-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+-        android.util.Log.d("VoiceFollow", "SpeechRecognizer created")
+-
+-        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+-            override fun onReadyForSpeech(params: Bundle?) {
+-                android.util.Log.d("VoiceFollow", "onReadyForSpeech")
+-            }
+-            override fun onBeginningOfSpeech() {
+-                android.util.Log.d("VoiceFollow", "onBeginningOfSpeech")
+-            }
+-            override fun onRmsChanged(rmsdB: Float) {}
+-            override fun onBufferReceived(buffer: ByteArray?) {}
+-            override fun onEndOfSpeech() {
+-                android.util.Log.d("VoiceFollow", "onEndOfSpeech")
+-                isListening = false
+-                if (isPlaying && useVoiceFollow) {
+-                    android.os.Handler(mainLooper).postDelayed({
+-                        if (isPlaying && useVoiceFollow) restartListening()
+-                    }, 100)
+-                }
+-            }
+-            override fun onError(error: Int) {
+-                val errorName = when (error) {
+-                    SpeechRecognizer.ERROR_AUDIO -> "AUDIO"
+-                    SpeechRecognizer.ERROR_CLIENT -> "CLIENT"
+-                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "NO_PERMISSION"
+-                    SpeechRecognizer.ERROR_NETWORK -> "NETWORK"
+-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "NETWORK_TIMEOUT"
+-                    SpeechRecognizer.ERROR_NO_MATCH -> "NO_MATCH"
+-                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "BUSY"
+-                    SpeechRecognizer.ERROR_SERVER -> "SERVER"
+-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "SPEECH_TIMEOUT"
+-                    else -> "UNKNOWN($error)"
+-                }
+-                android.util.Log.e("VoiceFollow", "onError: $errorName")
+-                isListening = false
+-                if (isPlaying && useVoiceFollow) {
+-                    android.os.Handler(mainLooper).postDelayed({
+-                        if (isPlaying && useVoiceFollow) restartListening()
+-                    }, 500)
+-                }
+-            }
+-            override fun onResults(results: Bundle?) {
+-                android.util.Log.d("VoiceFollow", "onResults")
+-                isListening = false
+-                handleRecognitionResults(results)
+-                if (isPlaying && useVoiceFollow) {
+-                    android.os.Handler(mainLooper).postDelayed({
+-                        if (isPlaying && useVoiceFollow) restartListening()
+-                    }, 100)
+-                }
+-            }
+-            override fun onPartialResults(partialResults: Bundle?) {
+-                android.util.Log.d("VoiceFollow", "onPartialResults")
+-                handleRecognitionResults(partialResults)
+-            }
+-            override fun onEvent(eventType: Int, params: Bundle?) {}
+-        })
+-
+-        restartListening()
+     }
+ 
+-    private fun restartListening() {
+-        if (isListening) {
+-            android.util.Log.d("VoiceFollow", "restartListening skipped: already listening")
+-            return
+-        }
+-        if (speechRecognizer == null) {
+-            android.util.Log.e("VoiceFollow", "restartListening: speechRecognizer is null")
+-            return
+-        }
+-        try {
+-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
+-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+-            }
+-            speechRecognizer?.startListening(intent)
+-            isListening = true
+-            android.util.Log.d("VoiceFollow", "startListening called successfully")
+-        } catch (e: Exception) {
+-            android.util.Log.e("VoiceFollow", "startListening exception: ${e.message}")
+-            isListening = false
+-        }
+-    }
++    // ==================== 麦克风音量检测 ====================
++    private fun startVoiceDetection() {
++        if (isRecording) return
+ 
+-    private fun stopVoiceRecognition() {
+-        isListening = false
+         try {
+-            speechRecognizer?.cancel()
+-        } catch (e: Exception) {}
+-    }
+-
+-    private fun handleRecognitionResults(results: Bundle?) {
+-        if (results == null || scriptText.isEmpty()) {
+-            android.util.Log.d("VoiceFollow", "handleResults: results=$results scriptEmpty=${scriptText.isEmpty()}")
+-            return
+-        }
+-
+-        val matches = results.getStringArray(SpeechRecognizer.RESULTS_RECOGNITION)
+-            ?: results.getStringArray("results_recognition")
+-            ?: run {
+-                android.util.Log.d("VoiceFollow", "handleResults: no matches array")
++            audioRecord = AudioRecord(
++                MediaRecorder.AudioSource.MIC,
++                SAMPLE_RATE,
++                CHANNEL_CONFIG,
++                AUDIO_FORMAT,
++                bufferSize * 2
++            )
++
++            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
++                android.util.Log.e("VoiceDetect", "AudioRecord init failed")
++                Toast.makeText(this, "麦克风初始化失败", Toast.LENGTH_SHORT).show()
+                 return
+             }
+ 
+-        if (matches.isEmpty()) {
+-            android.util.Log.d("VoiceFollow", "handleResults: matches empty")
+-            return
+-        }
++            audioRecord?.startRecording()
++            isRecording = true
++            silenceCount = 0
+ 
+-        val spoken = matches[0].replace(" ", "").replace("\n", "").trim()
+-        android.util.Log.d("VoiceFollow", "handleResults: spoken='$spoken' (len=${spoken.length})")
++            recordThread = Thread {
++                val buffer = ShortArray(bufferSize)
++                android.util.Log.d("VoiceDetect", "Recording started, bufferSize=$bufferSize")
+ 
+-        if (spoken.isEmpty()) return
++                while (isRecording) {
++                    val read = audioRecord?.read(buffer, 0, bufferSize) ?: -1
++                    if (read <= 0) continue
+ 
+-        // 在台词中查找匹配位置
+-        val matchPos = findMatchPosition(scriptText, spoken, lastMatchPos)
+-        android.util.Log.d("VoiceFollow", "handleResults: matchPos=$matchPos lastMatchPos=$lastMatchPos")
++                    // 计算 RMS 音量
++                    var sum = 0L
++                    for (i in 0 until read) {
++                        val v = buffer[i].toInt()
++                        sum += (v * v).toLong()
++                    }
++                    val rms = Math.sqrt(sum.toDouble() / read)
++
++                    // 判断是否在说话
++                    if (rms > VOLUME_THRESHOLD) {
++                        // 说话中：根据音量计算滚动速度
++                        val ratio = Math.min(1.0, (rms - VOLUME_THRESHOLD) / (VOLUME_HIGH - VOLUME_THRESHOLD))
++                        targetSpeed = (BASE_SPEED + ratio * BASE_SPEED * 1.5).toFloat()
++                        silenceCount = 0
++                    } else {
++                        // 静默：逐渐减速
++                        silenceCount++
++                        if (silenceCount > 3) {
++                            targetSpeed = 0f
++                        }
++                    }
+ 
+-        if (matchPos >= 0) {
+-            lastMatchPos = matchPos
+-            // 通知 WebView 滚动到该字符位置
+-            val spokenText = scriptText.substring(0, matchPos + spoken.length)
+-                .replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
+-            val js = "window.AndroidBridge && window.AndroidBridge.scrollToText('$spokenText');"
+-            android.util.Log.d("VoiceFollow", "calling JS: scrollToText length=${spokenText.length}")
+-            webView.evaluateJavascript(js, null)
+-        }
+-    }
++                    // 平滑速度变化
++                    scrollSpeed += (targetSpeed - scrollSpeed) * SPEED_SMOOTHING
++
++                    // 通知 WebView 滚动
++                    if (scrollSpeed > 0.1f) {
++                        mainHandler.post {
++                            webView.evaluateJavascript(
++                                "window.AndroidBridge && window.AndroidBridge.scroll($scrollSpeed);",
++                                null
++                            )
++                        }
++                    }
+ 
+-    /**
+-     * 在台词文本中查找识别到的语音内容位置
+-     * 使用模糊匹配，从上次匹配位置开始搜索
+-     */
+-    private fun findMatchPosition(script: String, spoken: String, startPos: Int): Int {
+-        val cleanScript = script.replace(" ", "").replace("\n", "").replace("\r", "")
+-
+-        // 取语音识别结果的最后几个字作为搜索词（更精确）
+-        val searchLen = minOf(spoken.length, 15)
+-        val searchWord = spoken.takeLast(searchLen)
+-
+-        // 在原始台词中搜索（从上次位置之后开始）
+-        for (i in startPos until script.length - searchWord.length) {
+-            var match = true
+-            var scriptIdx = i
+-            var spokenIdx = 0
+-
+-            while (scriptIdx < script.length && spokenIdx < searchWord.length) {
+-                val sc = script[scriptIdx]
+-                // 跳过空格和换行
+-                if (sc == ' ' || sc == '\n' || sc == '\r' || sc == '\t' || sc == '，' || sc == '。' || sc == '、' || sc == '！' || sc == '？' || sc == '：' || sc == '；') {
+-                    scriptIdx++
+-                    continue
+-                }
+-                if (sc != searchWord[spokenIdx]) {
+-                    match = false
+-                    break
++                    // 控制采样频率（约 30fps）
++                    Thread.sleep(33)
+                 }
+-                scriptIdx++
+-                spokenIdx++
+-            }
+ 
+-            if (match && spokenIdx == searchWord.length) {
+-                return i
++                android.util.Log.d("VoiceDetect", "Recording stopped")
+             }
++
++            recordThread?.start()
++        } catch (e: SecurityException) {
++            android.util.Log.e("VoiceDetect", "No mic permission: ${e.message}")
++            Toast.makeText(this, "没有麦克风权限", Toast.LENGTH_LONG).show()
++        } catch (e: Exception) {
++            android.util.Log.e("VoiceDetect", "startVoiceDetection error: ${e.message}")
+         }
++    }
+ 
+-        // 如果从头搜索也找不到，返回 -1
+-        return -1
++    private fun stopVoiceDetection() {
++        isRecording = false
++        try {
++            audioRecord?.stop()
++        } catch (e: Exception) {}
++        try {
++            audioRecord?.release()
++        } catch (e: Exception) {}
++        audioRecord = null
++        recordThread = null
++        scrollSpeed = 0f
++        targetSpeed = 0f
+     }
+ 
+     private fun toggleMinimize() {
+@@ -620,9 +431,6 @@ class FloatingTeleprompterService : Service() {
+         windowManager.updateViewLayout(rootView, layoutParams)
+     }
+ 
+-    /**
+-     * JavaScript 接口：供 WebView 内的 JS 调用原生方法
+-     */
+     inner class WebAppInterface {
+         @JavascriptInterface
+         fun showToast(message: String) {
+@@ -631,8 +439,12 @@ class FloatingTeleprompterService : Service() {
+ 
+         @JavascriptInterface
+         fun onPlaybackEnded() {
+-            isPlaying = false
+-            btnPlayPause.setImageResource(android.R.drawable.ic_media_play)
++            mainHandler.post {
++                isPlaying = false
++                btnPlayPause.setImageResource(android.R.drawable.ic_media_play)
++                tvStatus.text = "已结束"
++                stopVoiceDetection()
++            }
+         }
+ 
+         @JavascriptInterface
+@@ -656,9 +468,7 @@ class FloatingTeleprompterService : Service() {
+     override fun onDestroy() {
+         super.onDestroy()
+         isRunning = false
+-        stopVoiceRecognition()
+-        speechRecognizer?.destroy()
+-        speechRecognizer = null
++        stopVoiceDetection()
+         if (::rootView.isInitialized && rootView.isAttachedToWindow) {
+             windowManager.removeView(rootView)
+         }
+diff --git a/android/app/src/main/res/layout/floating_window.xml b/android/app/src/main/res/layout/floating_window.xml
+index 2e2380e..d06851c 100644
+--- a/android/app/src/main/res/layout/floating_window.xml
++++ b/android/app/src/main/res/layout/floating_window.xml
+@@ -52,63 +52,37 @@
+         android:layout_height="0dp"
+         android:layout_weight="1" />
+ 
+-    <!-- 底部控制栏 -->
++    <!-- 底部控制栏：状态 + 播放按钮 -->
+     <LinearLayout
+         android:id="@+id/bottomBar"
+         android:layout_width="match_parent"
+-        android:layout_height="48dp"
++        android:layout_height="44dp"
+         android:background="#80000000"
+         android:gravity="center_vertical"
+         android:orientation="horizontal"
+-        android:paddingHorizontal="8dp">
+-
+-        <ImageButton
+-            android:id="@+id/btnSlower"
+-            android:layout_width="36dp"
+-            android:layout_height="36dp"
+-            android:background="?android:attr/selectableItemBackgroundBorderless"
+-            android:src="@android:drawable/ic_media_previous"
+-            android:contentDescription="减速"
+-            android:tint="#FFFFFF" />
++        android:paddingHorizontal="12dp">
+ 
+         <TextView
+-            android:id="@+id/tvSpeed"
+-            android:layout_width="wrap_content"
+-            android:layout_height="wrap_content"
+-            android:paddingHorizontal="8dp"
+-            android:text="35"
+-            android:textColor="#FFFFFF"
+-            android:textSize="13sp" />
+-
+-        <SeekBar
+-            android:id="@+id/seekSpeed"
++            android:id="@+id/tvStatus"
+             android:layout_width="0dp"
+             android:layout_height="wrap_content"
+             android:layout_weight="1"
+-            android:max="99"
+-            android:progress="34" />
+-
+-        <ImageButton
+-            android:id="@+id/btnFaster"
+-            android:layout_width="36dp"
+-            android:layout_height="36dp"
+-            android:background="?android:attr/selectableItemBackgroundBorderless"
+-            android:src="@android:drawable/ic_media_next"
+-            android:contentDescription="加速"
+-            android:tint="#FFFFFF" />
++            android:text="就绪"
++            android:textColor="#FFFFFF"
++            android:textSize="13sp"
++            android:paddingHorizontal="4dp" />
+ 
+         <ImageButton
+             android:id="@+id/btnPlayPause"
+             android:layout_width="40dp"
+             android:layout_height="40dp"
+-            android:layout_marginStart="8dp"
+             android:background="@drawable/btn_primary_bg"
+             android:src="@android:drawable/ic_media_play"
+             android:contentDescription="播放/暂停"
+             android:tint="#FFFFFF" />
+     </LinearLayout>
+ 
+-    <!-- 最小化后的圆形按钮（默认隐藏） -->
++    <!-- 最小化后的圆形按钮 -->
+     <ImageButton
+         android:id="@+id/btnExpand"
+         android:layout_width="56dp"
