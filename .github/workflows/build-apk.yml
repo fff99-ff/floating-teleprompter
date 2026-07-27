@@ -28,13 +28,19 @@ jobs:
       with:
         gradle-version: '8.2'
 
-    - name: Generate Gradle Wrapper
-      working-directory: android
-      run: gradle wrapper --gradle-version 8.2
-
     - name: Build Debug APK
       working-directory: android
-      run: ./gradlew assembleDebug --no-daemon --stacktrace
+      run: |
+        set -o pipefail
+        gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee build-output.log
+        echo "BUILD_EXIT_CODE=${PIPESTATUS[0]}"
+
+    - name: Upload build log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: android/build-output.log
 
     - name: Check APK exists
       working-directory: android
@@ -43,6 +49,7 @@ jobs:
           echo "APK found: $(ls -lh app/build/outputs/apk/debug/app-debug.apk)"
         else
           echo "APK NOT found!"
+          cat build-output.log
           exit 1
         fi
 
