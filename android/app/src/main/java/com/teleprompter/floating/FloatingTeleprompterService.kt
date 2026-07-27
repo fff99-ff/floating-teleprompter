@@ -33,6 +33,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import java.util.Locale
+import kotlin.math.sqrt
 
 class FloatingTeleprompterService : Service() {
 
@@ -342,7 +343,7 @@ class FloatingTeleprompterService : Service() {
                         val v = buffer[i].toInt()
                         sum += (v * v).toLong()
                     }
-                    val rms = Math.sqrt(sum.toDouble() / read)
+                    val rms = sqrt(sum.toDouble() / read)
 
                     // 判断是否在说话
                     if (rms > VOLUME_THRESHOLD) {
