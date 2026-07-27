@@ -42,15 +42,15 @@ class FloatingTeleprompterService : Service() {
         const val CHANNEL_ID = "floating_teleprompter_channel"
         const val NOTIFICATION_ID = 1001
         var isRunning = false
-
-        // 音频采样参数
-        private const val SAMPLE_RATE = 44100
-        private const val BUFFER_SIZE_FACTOR = 2
-        private const val VOLUME_THRESHOLD = 800f
-        private const val VOLUME_HIGH = 8000f
-        private const val BASE_SPEED = 2.5f
-        private const val SPEED_SMOOTHING = 0.15f
     }
+
+    // 音频采样参数（类主体中定义为 val，避免 companion object private 成员不可外部访问的问题）
+    private val SAMPLE_RATE = 44100
+    private val BUFFER_SIZE_FACTOR = 2
+    private val VOLUME_THRESHOLD = 800f
+    private val VOLUME_HIGH = 8000f
+    private val BASE_SPEED = 2.5f
+    private val SPEED_SMOOTHING = 0.15f
 
     private lateinit var windowManager: WindowManager
     private lateinit var layoutParams: WindowManager.LayoutParams
@@ -80,10 +80,6 @@ class FloatingTeleprompterService : Service() {
     // 滚动控制
     private var scrollSpeed = 0f  // 当前滚动速度（像素/帧）
     private var targetSpeed = 0f  // 目标速度
-    private val BASE_SPEED = 2.5f  // 基础滚动速度
-    private val SPEED_SMOOTHING = 0.15f  // 速度平滑系数
-    private val VOLUME_THRESHOLD = 800f  // 说话音量阈值
-    private val VOLUME_HIGH = 8000f  // 大声说话阈值
 
     override fun onBind(intent: Intent?): IBinder? = null
 
