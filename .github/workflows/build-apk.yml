@@ -43,6 +43,16 @@ jobs:
         name: build-log
         path: android/build-log.txt
 
+    - name: Check APK files
+      working-directory: android
+      run: |
+        echo "=== Checking APK files ==="
+        find . -name "*.apk" -type f 2>/dev/null || echo "No APK files found with find"
+        ls -la app/build/outputs/apk/debug/ 2>/dev/null || echo "Debug directory not found"
+        ls -la app/build/outputs/apk/release/ 2>/dev/null || echo "Release directory not found"
+        echo "=== Build output structure ==="
+        find app/build -type f 2>/dev/null | head -50 || echo "No build output"
+
     - name: Upload APK
       if: always()
       uses: actions/upload-artifact@v4
