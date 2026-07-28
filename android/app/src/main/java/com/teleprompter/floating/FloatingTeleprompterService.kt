@@ -48,10 +48,14 @@ class FloatingTeleprompterService : Service() {
     // 音频采样参数（类主体中定义为 val，避免 companion object private 成员不可外部访问的问题）
     private val SAMPLE_RATE = 44100
     private val BUFFER_SIZE_FACTOR = 2
-    private val VOLUME_THRESHOLD = 800f
-    private val VOLUME_HIGH = 8000f
-    private val BASE_SPEED = 2.5f
-    private val SPEED_SMOOTHING = 0.15f
+    private val VOLUME_THRESHOLD = 600f
+    private val VOLUME_HIGH = 6000f
+    private val BASE_SPEED = 2.0f
+    private val MAX_SPEED_MULTIPLIER = 2.5f
+    private val SPEED_SMOOTHING = 0.12f
+    private val VOLUME_SMOOTHING = 0.3f
+    private val MIN_SCROLL_SPEED = 0.8f
+    private val STARTUP_DELAY_FRAMES = 5
 
     private lateinit var windowManager: WindowManager
     private lateinit var layoutParams: WindowManager.LayoutParams
@@ -76,11 +80,14 @@ class FloatingTeleprompterService : Service() {
     private var recordThread: Thread? = null
     private var bufferSize = 0
     private var silenceCount = 0  // 连续静默帧计数
+    private var smoothedVolume = 0f  // 平滑后的音量
+    private var startupFrameCount = 0  // 启动帧计数
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // 滚动控制
     private var scrollSpeed = 0f  // 当前滚动速度（像素/帧）
     private var targetSpeed = 0f  // 目标速度
+    private var userSpeedMultiplier = 1.0f  // 用户调整的速度倍数
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -328,6 +335,8 @@ class FloatingTeleprompterService : Service() {
             audioRecord?.startRecording()
             isRecording = true
             silenceCount = 0
+            smoothedVolume = 0f
+            startupFrameCount = 0
 
             recordThread = Thread {
                 val buffer = ShortArray(bufferSize)
@@ -345,25 +354,46 @@ class FloatingTeleprompterService : Service() {
                     }
                     val rms = sqrt(sum.toDouble() / read)
 
+                    // 启动延迟：前几帧不响应，避免瞬间误触发
+                    if (startupFrameCount < STARTUP_DELAY_FRAMES) {
+                        startupFrameCount++
+                        Thread.sleep(33)
+                        continue
+                    }
+
+                    // 音量平滑（指数移动平均）
+                    val rawVolume = rms.toFloat()
+                    smoothedVolume += (rawVolume - smoothedVolume) * VOLUME_SMOOTHING
+
                     // 判断是否在说话
-                    if (rms > VOLUME_THRESHOLD) {
+                    if (smoothedVolume > VOLUME_THRESHOLD) {
                         // 说话中：根据音量计算滚动速度
-                        val ratio = Math.min(1.0, (rms - VOLUME_THRESHOLD) / (VOLUME_HIGH - VOLUME_THRESHOLD))
-                        targetSpeed = (BASE_SPEED + ratio * BASE_SPEED * 1.5).toFloat()
+                        val ratio = Math.min(1.0, 
+                            (smoothedVolume - VOLUME_THRESHOLD) / (VOLUME_HIGH - VOLUME_THRESHOLD))
+                        // 使用非线性映射，让低速更灵敏，高速更稳定
+                        val curvedRatio = Math.pow(ratio.toDouble(), 0.7).toFloat()
+                        targetSpeed = (BASE_SPEED + curvedRatio * BASE_SPEED * MAX_SPEED_MULTIPLIER) * userSpeedMultiplier
                         silenceCount = 0
                     } else {
-                        // 静默：逐渐减速
+                        // 静默：逐渐减速（更平缓的过渡）
                         silenceCount++
-                        if (silenceCount > 3) {
+                        if (silenceCount > 5) {
                             targetSpeed = 0f
+                        } else {
+                            targetSpeed *= 0.7f  // 每帧衰减 30%
                         }
                     }
 
-                    // 平滑速度变化
+                    // 平滑速度变化（更灵敏的响应）
                     scrollSpeed += (targetSpeed - scrollSpeed) * SPEED_SMOOTHING
 
+                    // 确保最小滚动速度（当有声音时）
+                    if (smoothedVolume > VOLUME_THRESHOLD && scrollSpeed < MIN_SCROLL_SPEED * userSpeedMultiplier) {
+                        scrollSpeed = MIN_SCROLL_SPEED * userSpeedMultiplier
+                    }
+
                     // 通知 WebView 滚动
-                    if (scrollSpeed > 0.1f) {
+                    if (scrollSpeed > 0.05f) {
                         val speedStr = String.format(Locale.US, "%.2f", scrollSpeed)
                         mainHandler.post {
                             webView.evaluateJavascript(
@@ -447,6 +477,16 @@ class FloatingTeleprompterService : Service() {
                 tvStatus.text = "已结束"
                 stopVoiceDetection()
             }
+        }
+
+        @JavascriptInterface
+        fun setSpeedMultiplier(multiplier: Float) {
+            userSpeedMultiplier = multiplier.coerceIn(0.2f, 3.0f)
+        }
+
+        @JavascriptInterface
+        fun getSpeedMultiplier(): Float {
+            return userSpeedMultiplier
         }
 
         @JavascriptInterface
