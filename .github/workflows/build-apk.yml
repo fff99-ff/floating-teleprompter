@@ -26,51 +26,23 @@ jobs:
           platforms;android-34
           build-tools;34.0.0
 
-    - name: Cache Gradle
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.gradle/caches
-          ~/.gradle/wrapper
-        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
-        restore-keys: |
-          ${{ runner.os }}-gradle-
-
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
       with:
         gradle-version: '8.2'
 
-    - name: Generate Gradle Wrapper
+    - name: Build Debug APK with Gradle
       working-directory: android
       run: |
-        rm -f gradlew gradlew.bat
-        rm -rf gradle/wrapper
-        gradle wrapper --gradle-version 8.2
-        chmod +x gradlew
+        gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee build-log.txt
+        echo "EXIT_CODE=$?"
 
-    - name: Make gradlew executable
-      working-directory: android
-      run: chmod +x gradlew
-
-    - name: Show Project Structure
+    - name: Check APK Output
       working-directory: android
       run: |
-        echo "=== Files in android/ ==="
-        ls -la
-        echo "=== app/ contents ==="
-        ls -la app/
-        echo "=== app/src/main/ contents ==="
-        ls -la app/src/main/
-
-    - name: Build Debug APK
-      working-directory: android
-      run: |
-        set -o pipefail
-        ./gradlew assembleDebug --no-daemon --stacktrace --info 2>&1 | tee build-log.txt
-        echo "============= EXIT CODE: $? ============="
-        echo "============= LAST 100 LINES ============="
-        tail -n 100 build-log.txt
+        echo "=== Checking for APK ==="
+        find . -name "*.apk" -type f 2>/dev/null || echo "No APK found"
+        ls -la app/build/outputs/apk/debug/ 2>/dev/null || echo "Debug dir not found"
 
     - name: Upload Build Log (on failure)
       if: failure()
@@ -81,9 +53,8 @@ jobs:
 
     - name: Upload Debug APK
       if: success()
-      working-directory: android
       uses: actions/upload-artifact@v4
       with:
         name: 悬浮提词器-APK
-        path: app/build/outputs/apk/debug/*.apk
+        path: android/app/build/outputs/apk/debug/*.apk
         if-no-files-found: error
